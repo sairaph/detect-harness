@@ -1,0 +1,16 @@
+/.build/
+/.dist/
+/.env
+/.env.*
+!/.env.example
+*.exe
+*.test
+
+wrappers/node/dist/
+wrappers/node/node_modules/
+wrappers/python/build/
+wrappers/python/dist/
+wrappers/python/*.egg-info/
+wrappers/python/src/*.egg-info/
+wrappers/python/**/__pycache__/
+wrappers/rust/target/

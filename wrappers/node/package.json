@@ -1,0 +1,42 @@
+{
+  "name": "@sairaph/detect-harness",
+  "version": "0.1.0",
+  "description": "TypeScript wrapper for the detect-harness companion binary",
+  "license": "MIT",
+  "author": "Łael Al-Halawani <laelhalawani@gmail.com>",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test test/*.test.mjs",
+    "prepack": "npm run build"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.2"
+  },
+  "keywords": [
+    "detect-harness",
+    "mcp"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sairaph/detect-harness.git",
+    "directory": "wrappers/node"
+  }
+}

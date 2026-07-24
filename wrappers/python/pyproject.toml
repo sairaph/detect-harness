@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "detect-harness"
+version = "0.1.0"
+description = "Python wrapper for the detect-harness companion binary"
+license = { file = "LICENSE" }
+authors = [{ name = "Łael Al-Halawani", email = "laelhalawani@gmail.com" }]
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+keywords = ["detect-harness", "mcp"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Typing :: Typed",
+]
+
+[project.urls]
+Repository = "https://github.com/sairaph/detect-harness"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+detect_harness = ["py.typed"]

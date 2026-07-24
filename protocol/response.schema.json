@@ -1,0 +1,138 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/sairaph/detect-harness/protocol/response.schema.json",
+  "title": "detect-harness response",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "ok"],
+  "properties": {
+    "version": { "const": 1 },
+    "ok": { "type": "boolean" },
+    "detections": { "type": "array", "items": { "$ref": "#/$defs/detection" } },
+    "config": { "type": "string" },
+    "changes": { "type": "array", "items": { "$ref": "#/$defs/change" } },
+    "results": { "type": "array", "items": { "$ref": "#/$defs/result" } },
+    "error": { "$ref": "#/$defs/error" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "ok": { "const": false } }, "required": ["ok"] },
+      "then": {
+        "required": ["error"],
+        "not": { "anyOf": [
+          { "required": ["detections"] },
+          { "required": ["config"] },
+          { "required": ["changes"] },
+          { "required": ["results"] }
+        ] }
+      },
+      "else": {
+        "not": { "required": ["error"] },
+        "oneOf": [
+          {
+            "required": ["detections"],
+            "not": { "anyOf": [
+              { "required": ["config"] },
+              { "required": ["changes"] },
+              { "required": ["results"] }
+            ] }
+          },
+          {
+            "required": ["config"],
+            "not": { "anyOf": [
+              { "required": ["detections"] },
+              { "required": ["changes"] },
+              { "required": ["results"] }
+            ] }
+          },
+          {
+            "required": ["changes"],
+            "not": { "anyOf": [
+              { "required": ["detections"] },
+              { "required": ["config"] }
+            ] }
+          }
+        ]
+      }
+    }
+  ],
+  "$defs": {
+    "harness": {
+      "type": "object",
+      "required": ["id", "name", "reloadHint"],
+      "properties": {
+        "id": { "$ref": "#/$defs/harnessId" },
+        "name": { "type": "string" },
+        "reloadHint": { "type": "string" }
+      }
+    },
+    "detection": {
+      "allOf": [
+        { "$ref": "#/$defs/harness" },
+        {
+          "type": "object",
+          "required": ["state"],
+          "properties": {
+            "state": { "enum": ["present", "absent", "unavailable"] },
+            "evidence": { "type": "array", "items": { "type": "string" } },
+            "reason": { "type": "string" },
+            "configPath": { "type": "string" },
+            "configError": { "type": "string" }
+          }
+        }
+      ]
+    },
+    "change": {
+      "type": "object",
+      "required": ["harnessId", "name", "desired", "state"],
+      "properties": {
+        "harnessId": { "$ref": "#/$defs/harnessId" },
+        "name": { "type": "string" },
+        "path": { "type": "string" },
+        "desired": { "enum": ["present", "absent"] },
+        "state": { "enum": ["ready", "noop", "conflict", "unavailable"] },
+        "action": { "enum": ["add", "update", "remove"] },
+        "reason": { "type": "string" }
+      }
+    },
+    "result": {
+      "type": "object",
+      "required": ["harnessId", "name", "desired", "state"],
+      "properties": {
+        "harnessId": { "$ref": "#/$defs/harnessId" },
+        "name": { "type": "string" },
+        "path": { "type": "string" },
+        "desired": { "enum": ["present", "absent"] },
+        "state": { "enum": ["applied", "noop", "skipped", "conflict", "failed"] },
+        "action": { "enum": ["add", "update", "remove"] },
+        "reason": { "type": "string" }
+      }
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message"],
+      "properties": {
+        "code": { "type": "string" },
+        "message": { "type": "string" }
+      }
+    },
+    "harnessId": {
+      "enum": [
+        "claude-desktop",
+        "claude-code",
+        "cursor",
+        "codex",
+        "gemini-cli",
+        "windsurf",
+        "zed",
+        "cline",
+        "roo-code",
+        "amazon-q",
+        "continue",
+        "opencode",
+        "vscode"
+      ]
+    }
+  }
+}
