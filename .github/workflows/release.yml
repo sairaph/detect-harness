@@ -240,7 +240,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if draft="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq .draft 2>/dev/null)"; then
+          if draft="$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null)"; then
             if [[ "$draft" != "true" ]]; then
               echo "::error::$TAG is already published"
               exit 1
@@ -268,5 +268,4 @@ jobs:
           TAG: ${{ needs.prepare.outputs.tag }}
         shell: bash
         run: |
-          release_id="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq .id)"
-          gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" -F draft=false -f make_latest=legacy
+          gh release edit "$TAG" --draft=false --latest
