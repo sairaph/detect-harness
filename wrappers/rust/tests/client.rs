@@ -124,11 +124,7 @@ fn render_plan_and_update_use_the_expected_protocol_shapes() {
     );
     let outcome = updated
         .client()
-        .update(
-            &[HarnessId::Codex],
-            DesiredState::Absent,
-            &server(),
-        )
+        .update(&[HarnessId::Codex], DesiredState::Absent, &server())
         .unwrap();
     assert_eq!(outcome.results[0].state, ResultState::Applied);
     assert_eq!(updated.request()["dryRun"], false);

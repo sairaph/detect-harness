@@ -213,12 +213,19 @@ impl fmt::Display for OutputStream {
 #[derive(Debug)]
 pub enum Error {
     EncodeRequest(serde_json::Error),
-    RequestTooLarge { limit: usize },
-    Spawn { binary: PathBuf, source: io::Error },
+    RequestTooLarge {
+        limit: usize,
+    },
+    Spawn {
+        binary: PathBuf,
+        source: io::Error,
+    },
     WriteRequest(io::Error),
     RequestWriterPanicked,
     Wait(io::Error),
-    Timeout { timeout: Duration },
+    Timeout {
+        timeout: Duration,
+    },
     ReadOutput {
         stream: OutputStream,
         source: io::Error,
@@ -229,10 +236,16 @@ pub enum Error {
     },
     ReaderPanicked(OutputStream),
     DecodeResponse(serde_json::Error),
-    UnsupportedProtocolVersion { expected: u32, actual: u32 },
+    UnsupportedProtocolVersion {
+        expected: u32,
+        actual: u32,
+    },
     InvalidResponse(&'static str),
     Protocol(ProtocolError),
-    ProcessFailed { code: Option<i32>, stderr: String },
+    ProcessFailed {
+        code: Option<i32>,
+        stderr: String,
+    },
 }
 
 impl fmt::Display for Error {
@@ -255,7 +268,10 @@ impl fmt::Display for Error {
                 write!(formatter, "failed to read companion {stream}: {source}")
             }
             Self::OutputTooLarge { stream, limit } => {
-                write!(formatter, "companion {stream} exceeds the {limit}-byte limit")
+                write!(
+                    formatter,
+                    "companion {stream} exceeds the {limit}-byte limit"
+                )
             }
             Self::ReaderPanicked(stream) => write!(formatter, "companion {stream} reader panicked"),
             Self::DecodeResponse(error) => write!(formatter, "invalid JSON response: {error}"),
@@ -263,7 +279,9 @@ impl fmt::Display for Error {
                 formatter,
                 "unsupported protocol version {actual}; expected {expected}"
             ),
-            Self::InvalidResponse(message) => write!(formatter, "invalid protocol response: {message}"),
+            Self::InvalidResponse(message) => {
+                write!(formatter, "invalid protocol response: {message}")
+            }
             Self::Protocol(error) => write!(formatter, "companion error: {error}"),
             Self::ProcessFailed { code, stderr } => {
                 write!(formatter, "companion process failed")?;
@@ -611,9 +629,7 @@ fn read_bounded(
     let mut output = Vec::with_capacity(limit.min(8192));
     let mut buffer = [0_u8; 8192];
     loop {
-        let count = reader
-            .read(&mut buffer)
-            .map_err(ReadFailure::Io)?;
+        let count = reader.read(&mut buffer).map_err(ReadFailure::Io)?;
         if count == 0 {
             return Ok(output);
         }
@@ -705,7 +721,10 @@ mod tests {
     #[test]
     fn binary_precedence_is_explicit_then_environment_then_path() {
         assert_eq!(
-            select_binary(Some(Path::new("/explicit/bin")), Some(OsString::from("env-bin"))),
+            select_binary(
+                Some(Path::new("/explicit/bin")),
+                Some(OsString::from("env-bin"))
+            ),
             OsString::from("/explicit/bin")
         );
         assert_eq!(
