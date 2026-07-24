@@ -1,0 +1,29 @@
+{
+  "name": "@sairaph/detect-harness-monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Detect AI harnesses and safely manage MCP server configurations",
+  "license": "MIT",
+  "author": "Łael Al-Halawani <laelhalawani@gmail.com>",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sairaph/detect-harness.git"
+  },
+  "homepage": "https://github.com/sairaph/detect-harness#readme",
+  "bugs": "https://github.com/sairaph/detect-harness/issues",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "ai-agents",
+    "installer",
+    "claude",
+    "cursor"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "version:check": "node scripts/set-version.mjs --check",
+    "version:set": "node scripts/set-version.mjs"
+  }
+}

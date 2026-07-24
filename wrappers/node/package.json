@@ -32,7 +32,10 @@
   },
   "keywords": [
     "detect-harness",
-    "mcp"
+    "mcp",
+    "model-context-protocol",
+    "ai-agents",
+    "installer"
   ],
   "repository": {
     "type": "git",

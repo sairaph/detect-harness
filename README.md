@@ -1,120 +1,255 @@
 # detect-harness
 
-`detect-harness` detects AI coding harnesses and manages one canonical stdio
-MCP server definition across every supported client configuration.
+[![release](https://img.shields.io/github/v/release/sairaph/detect-harness?label=release)](https://github.com/sairaph/detect-harness/releases)
+[![CI](https://github.com/sairaph/detect-harness/actions/workflows/ci.yml/badge.svg)](https://github.com/sairaph/detect-harness/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/sairaph/detect-harness.svg)](https://pkg.go.dev/github.com/sairaph/detect-harness)
+[![license](https://img.shields.io/github/license/sairaph/detect-harness)](#license)
+[![platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-blue)](#supported-harnesses)
 
-The repository contains:
+Add a polished MCP installer to any Go server. Define one stdio server once,
+detect the AI harnesses on the machine, and let `detect-harness` generate and
+safely update every client-specific configuration.
 
-- An importable Go library.
-- A versioned JSON companion binary.
-- Typed Node, Python, and Rust wrappers around the binary.
-- JSON schemas for cross-language protocol conformance.
+Install the Go library:
+
+```bash
+go get github.com/sairaph/detect-harness@latest
+```
+
+Then detect and configure selected harnesses:
+
+```go
+installer, err := detectharness.New(detectharness.StdioServer{
+    Name:    "my-mcp",
+    Command: "/absolute/path/to/my-mcp",
+    Args:    []string{"mcp"},
+    Env:     map[string]string{"MY_MCP_MODE": "write"},
+})
+if err != nil {
+    log.Fatal(err)
+}
+
+ctx := context.Background()
+detected := installer.Detect(ctx)
+
+plan := installer.Plan(ctx, []detectharness.ID{
+    detectharness.Cursor,
+    detectharness.Codex,
+}, detectharness.Present, detectharness.PlanOptions{})
+
+// Show plan.Changes() in your CLI, ask for confirmation, then apply it.
+results := installer.Apply(ctx, plan)
+```
+
+The library does not provide a TUI or impose an installer flow. Your CLI owns
+selection and presentation; `detect-harness` owns detection, valid config
+generation, conflict handling, and safe persistence.
+
+Need the language-neutral companion for a Node, Python, Rust, or other server?
+
+```bash
+go install github.com/sairaph/detect-harness/cmd/detect-harness@latest
+```
+
+Set `DETECT_HARNESS_BIN` to that executable, or pass its path directly to a
+wrapper. Tagged releases also include native binaries and packaged wrappers for
+all supported platforms and languages.
+
+## Why detect-harness
+
+MCP clients agree on the protocol but not on where or how they store servers.
+An installer otherwise needs to independently solve client detection, platform
+paths, JSONC comments, TOML tables, YAML lists, collisions, concurrent edits,
+permissions, and uninstall behavior.
+
+`detect-harness` provides one reusable implementation:
+
+- **One canonical definition** - a single `StdioServer` becomes valid config for
+  every supported client.
+- **Evidence-based detection** - present, absent, and unavailable are distinct;
+  detection failures are never silently treated as absence.
+- **Plan before apply** - inspect changes, show a confirmation UI, then apply the
+  exact snapshots that were planned.
+- **Safe by default** - same-name foreign entries are conflicts unless the
+  caller explicitly opts into replacement.
+- **Format aware** - JSON, JSONC, TOML, and YAML receive their required native
+  shapes while unrelated settings and comments are retained.
+- **Cross-language** - use the Go package directly or invoke the versioned JSON
+  companion through typed Node, Python, and Rust wrappers.
 
 ## Supported harnesses
 
-Claude Desktop, Claude Code, Cursor, Codex CLI, Gemini CLI, Windsurf, Zed,
-Cline, Roo Code, Amazon Q Developer CLI, Continue, OpenCode, and VS Code.
+| ID | Harness | Config shape |
+|---|---|---|
+| `claude-desktop` | Claude Desktop | JSON `mcpServers` |
+| `claude-code` | Claude Code | JSON `mcpServers` |
+| `cursor` | Cursor | JSON `mcpServers` |
+| `codex` | Codex CLI | TOML `mcp_servers` |
+| `gemini-cli` | Gemini CLI | JSON `mcpServers` |
+| `windsurf` | Windsurf | JSON `mcpServers` |
+| `zed` | Zed | JSONC `context_servers` |
+| `cline` | Cline | JSON `mcpServers` |
+| `roo-code` | Roo Code | JSON `mcpServers` |
+| `amazon-q` | Amazon Q Developer CLI | JSON `mcpServers` |
+| `continue` | Continue | YAML `mcpServers` list |
+| `opencode` | OpenCode | JSONC `mcp` local command |
+| `vscode` | VS Code / Copilot | JSONC `servers` with stdio type |
 
-## Go library
+Paths are resolved per platform using the user home, XDG configuration root,
+and authoritative Windows application-data directories.
+
+## Core API
+
+### Detect
 
 ```go
-package main
+detections := installer.Detect(ctx)
+```
 
-import (
-    "context"
-    "log"
+Each result includes a stable harness ID, state, evidence, resolved config path,
+and reload hint. Detection can also run without a server definition:
 
-    detectharness "github.com/sairaph/detect-harness"
-)
+```go
+detections, err := detectharness.DetectHarnesses(ctx, detectharness.DetectOptions{})
+```
 
-func configure(command string) {
-    server := detectharness.StdioServer{
-        Name:    "my-mcp",
-        Command: command,
-        Args:    []string{"mcp"},
-        Env:     map[string]string{"MY_MCP_MODE": "write"},
-    }
+### Plan and apply
 
-    installer, err := detectharness.New(server)
-    if err != nil {
-        log.Fatal(err)
-    }
+```go
+plan := installer.Plan(ctx, selected, detectharness.Present, detectharness.PlanOptions{})
+changes := plan.Changes()
+results := installer.Apply(ctx, plan)
+```
 
-    ctx := context.Background()
-    detected := installer.Detect(ctx)
-    _ = detected // Present detections in your own CLI or TUI.
+Use `detectharness.Absent` to remove the registration. `Installer.Ensure` is a
+plan-and-apply convenience method for unattended flows.
 
-    plan := installer.Plan(ctx, []detectharness.ID{
-        detectharness.Cursor,
-        detectharness.Codex,
-    }, detectharness.Present, detectharness.PlanOptions{})
+### Render without writing
 
-    // Display plan.Changes() and request confirmation before applying.
-    results := installer.Apply(ctx, plan)
-    _ = results
+```go
+config, err := detectharness.RenderConfig(detectharness.VSCode, server)
+```
+
+This is useful for previews, documentation, fixtures, and installers that own
+their persistence layer.
+
+### Resolve conflicts
+
+The default `ConflictError` policy only updates or removes entries that exactly
+match the canonical server definition:
+
+```go
+options := detectharness.PlanOptions{
+    ConflictPolicy: detectharness.ConflictReplace,
 }
 ```
 
-`Installer.Ensure` is a plan-and-apply convenience method for unattended
-flows. `RenderConfig` generates a standalone configuration without filesystem
-access. `DetectHarnesses` performs detection without requiring a server.
+Use `ConflictReplace` only when your installer owns the stable server name and
+intentionally wants to migrate its executable path or environment.
 
-## Conflict behavior
+## Companion protocol
 
-The default `ConflictError` policy does not overwrite or remove a same-name
-entry unless it exactly matches the canonical server definition. Use
-`ConflictReplace` only when the calling installer owns that stable server name
-and intentionally wants to update or remove it.
-
-## Companion binary
-
-Build locally:
-
-```sh
-go build -o detect-harness ./cmd/detect-harness
-```
-
-The binary accepts one JSON document on standard input and emits one JSON
-document on standard output. Configuration values are never passed in process
+The `detect-harness` binary reads exactly one versioned JSON request from stdin
+and writes exactly one JSON response to stdout. Secrets never appear in process
 arguments.
 
-```sh
-printf '%s' '{"version":1,"operation":"detect"}' | ./detect-harness
+```bash
+printf '%s' '{"version":1,"operation":"detect"}' | detect-harness
 ```
 
-See [`protocol/`](protocol/) for schemas and operation details.
+Operations:
+
+| Operation | Purpose |
+|---|---|
+| `detect` | Return all harness detections and evidence |
+| `render` | Generate one standalone harness configuration |
+| `update` | Plan selected additions/removals and optionally apply them |
+
+The machine-readable contract lives in [`protocol/`](protocol/), including
+Draft 2020-12 request and response schemas.
 
 ## Language wrappers
 
-- Node: [`wrappers/node`](wrappers/node)
-- Python: [`wrappers/python`](wrappers/python)
-- Rust: [`wrappers/rust`](wrappers/rust)
+| Language | Package source | API |
+|---|---|---|
+| Node / TypeScript | [`wrappers/node`](wrappers/node) | `DetectHarnessClient` |
+| Python | [`wrappers/python`](wrappers/python) | `Client` |
+| Rust | [`wrappers/rust`](wrappers/rust) | `Client` |
 
-Wrappers resolve an explicitly configured binary first, then
-`DETECT_HARNESS_BIN`, then `detect-harness` on `PATH`. They do not currently
-download or execute code during package installation.
+All wrappers expose typed `detect`, `render`, `plan`, and `update` calls. They
+resolve an explicit binary path first, then `DETECT_HARNESS_BIN`, then
+`detect-harness` on `PATH`. They invoke without a shell, bound process output,
+support timeouts, and validate protocol responses.
+
+From a source checkout:
+
+```bash
+npm ci --prefix wrappers/node
+npm run build --prefix wrappers/node
+# Then install /path/to/detect-harness/wrappers/node in your application.
+python -m pip install ./wrappers/python
+cargo add --path wrappers/rust
+```
+
+Every tagged GitHub release contains the npm tarball, Python wheel and source
+distribution, Rust crate, protocol schemas, checksums, and native companion
+binaries for macOS, Linux, and Windows on AMD64 and ARM64.
 
 ## Safety model
 
-- Detection distinguishes present, absent, and unavailable states.
-- Configuration parsing rejects invalid roots and wrong container types.
-- Same-name foreign entries are conflicts unless replacement is explicit.
-- Plans retain snapshots and recheck files immediately before atomic
-  publication, reducing the chance of overwriting concurrent external edits.
-- Writes use same-directory staging, restrictive permissions, flushes, and
-  atomic replacement.
+- Invalid roots, wrong container types, duplicate JSON keys, oversized configs,
+  and multi-document YAML are rejected without writes.
 - JSONC comments, TOML source outside managed tables, YAML nodes, and unrelated
-  configuration values are retained.
-- Configuration files are bounded to 8 MiB and symbolic-link targets are
-  rejected.
-- Multi-harness application reports partial results and does not hide failures.
+  settings are retained.
+- Plans retain snapshots and recheck immediately before atomic publication.
+- New same-directory temporary files use restrictive permissions; existing
+  config permissions are retained, and staged content is flushed before replacement.
+- Config targets that are symbolic links are rejected.
+- Library operations are serialized by short-lived lock files; locks older than
+  five minutes are treated as stale and recovered.
+- Multi-harness changes report partial results instead of hiding failures.
+- Serialized protocol plans do not include complete user config contents.
+
+## Build and test
+
+Requirements: Go 1.22+, Node 18+, Python 3.10+, and Rust 1.71+.
+
+```bash
+go test ./...
+go vet ./...
+
+npm test --prefix wrappers/node
+PYTHONPATH=wrappers/python/src python -m unittest discover -s wrappers/python/tests -v
+cargo test --manifest-path wrappers/rust/Cargo.toml
+```
+
+Build the companion for the current platform:
+
+```bash
+go build -o detect-harness ./cmd/detect-harness
+```
+
+## Releases
+
+The root [`package.json`](package.json) is the version authority. Update every
+wrapper manifest together with:
+
+```bash
+npm run version:set -- 0.2.0
+npm run version:check
+```
+
+When that version change reaches `main`, the release workflow verifies all
+manifests, creates `v<version>`, runs the full test suite, and publishes one
+GitHub Release containing every binary and wrapper format. A manually pushed
+version tag must match the root version and point to a commit on `main`.
 
 ## Scope
 
-Version 1 installs local stdio MCP servers. Remote HTTP and SSE transports need
+Version 1 manages local stdio MCP servers. Remote HTTP and SSE transports need
 client-specific capability handling and are intentionally not implied by the
 current API.
 
 ## License
 
-MIT, copyright Łael Al-Halawani.
+MIT. Copyright © 2026 [Łael Al-Halawani](mailto:laelhalawani@gmail.com).

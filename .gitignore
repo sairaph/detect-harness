@@ -1,5 +1,7 @@
 /.build/
 /.dist/
+/dist/
+/release-assets/
 /.env
 /.env.*
 !/.env.example

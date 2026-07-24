@@ -1,24 +1,146 @@
-name: Release binaries
+name: Release
 
 on:
   push:
+    branches:
+      - main
+    paths:
+      - package.json
     tags:
       - "v*"
+  workflow_dispatch:
 
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.sha }}
+  cancel-in-progress: false
+
 jobs:
-  release:
+  prepare:
+    name: Validate version
     runs-on: ubuntu-latest
+    outputs:
+      release: ${{ steps.version.outputs.release }}
+      create_tag: ${{ steps.version.outputs.create_tag }}
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+      previous_tag: ${{ steps.version.outputs.previous_tag }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-node@v4
         with:
-          go-version: "1.22.x"
-          cache: true
+          node-version: 20
+      - id: version
+        name: Resolve release version
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          version="$(node -p 'require("./package.json").version')"
+          node scripts/set-version.mjs --check
+          if [[ ! "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::package.json must contain a stable X.Y.Z version: $version"
+            exit 1
+          fi
+
+          tag="v$version"
+          previous_tag=""
+          git fetch origin main --tags
+          expected_commit="$(git rev-parse HEAD)"
+
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            if [[ "$GITHUB_REF_NAME" != "$tag" ]]; then
+              echo "::error::tag $GITHUB_REF_NAME does not match package version $version"
+              exit 1
+            fi
+            if ! git merge-base --is-ancestor HEAD origin/main; then
+              echo "::error::release tag must point to a commit on main"
+              exit 1
+            fi
+            create_tag=false
+          else
+            if ! git merge-base --is-ancestor HEAD origin/main; then
+              echo "::error::automatic and manual releases must use a commit on main"
+              exit 1
+            fi
+
+            if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
+              previous=""
+              if [[ -n "${BEFORE_SHA:-}" && ! "$BEFORE_SHA" =~ ^0+$ ]]; then
+                previous="$(git show "$BEFORE_SHA:package.json" 2>/dev/null | node -e 'let s=""; process.stdin.on("data", d => s += d); process.stdin.on("end", () => console.log(JSON.parse(s).version))' || true)"
+              fi
+              if [[ "$previous" == "$version" ]]; then
+                echo "release=false" >> "$GITHUB_OUTPUT"
+                echo "create_tag=false" >> "$GITHUB_OUTPUT"
+                echo "tag=$tag" >> "$GITHUB_OUTPUT"
+                echo "version=$version" >> "$GITHUB_OUTPUT"
+                echo "previous_tag=" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+              if [[ -n "$previous" && "$previous" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+                IFS=. read -r major minor patch <<< "$version"
+                IFS=. read -r old_major old_minor old_patch <<< "$previous"
+                if (( major < old_major || (major == old_major && minor < old_minor) || (major == old_major && minor == old_minor && patch <= old_patch) )); then
+                  echo "::error::$version must be greater than the previous version $previous"
+                  exit 1
+                fi
+              fi
+              if [[ -n "$previous" ]]; then
+                previous_tag="v$previous"
+              fi
+            fi
+
+            if git rev-parse --verify --quiet "refs/tags/$tag" >/dev/null; then
+              tagged_commit="$(git rev-list -n 1 "$tag")"
+              if [[ "$tagged_commit" != "$expected_commit" ]]; then
+                echo "::error::$tag already points to a different commit"
+                exit 1
+              fi
+              create_tag=false
+            else
+              create_tag=true
+            fi
+          fi
+
+          if [[ "$create_tag" == "true" && "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            latest="$(git tag --list 'v*' --sort=-version:refname | while IFS= read -r candidate; do if [[ "$candidate" != "$tag" && "$candidate" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then echo "$candidate"; break; fi; done)"
+            if [[ -n "$latest" ]]; then
+              old="${latest#v}"
+              IFS=. read -r major minor patch <<< "$version"
+              IFS=. read -r old_major old_minor old_patch <<< "$old"
+              if (( major < old_major || (major == old_major && minor < old_minor) || (major == old_major && minor == old_minor && patch <= old_patch) )); then
+                echo "::error::$version must be greater than the latest version $old"
+                exit 1
+              fi
+            fi
+          fi
+
+          echo "release=true" >> "$GITHUB_OUTPUT"
+          echo "create_tag=$create_tag" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "previous_tag=$previous_tag" >> "$GITHUB_OUTPUT"
+
+  ci:
+    name: Full release CI
+    needs: prepare
+    if: needs.prepare.outputs.release == 'true'
+    uses: ./.github/workflows/ci.yml
+
+  wrappers:
+    name: Package language wrappers
+    needs: [prepare, ci]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -27,14 +149,126 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: rustup toolchain install stable --profile minimal
-      - run: go test ./...
-      - run: go vet ./...
-      - run: npm ci --prefix wrappers/node
-      - run: npm test --prefix wrappers/node
-      - run: PYTHONPATH=wrappers/python/src python -m unittest discover -s wrappers/python/tests -v
-      - run: cargo test --manifest-path wrappers/rust/Cargo.toml
+      - run: rustup toolchain install 1.71.0 --profile minimal
+      - run: rustup default 1.71.0
+      - run: node scripts/set-version.mjs --check
+      - run: mkdir release-assets
+      - run: npm ci
+        working-directory: wrappers/node
+      - run: npm pack --pack-destination ../../release-assets
+        working-directory: wrappers/node
+      - run: python -m pip install build
+      - run: python -m build --outdir ../../release-assets
+        working-directory: wrappers/python
+      - run: cargo package --locked --manifest-path wrappers/rust/Cargo.toml
+      - run: cp "wrappers/rust/target/package/detect-harness-${{ needs.prepare.outputs.version }}.crate" release-assets/
+      - run: tar -czf release-assets/detect-harness-protocol-v1.tar.gz protocol
+      - run: sha256sum * > wrapper-checksums.txt
+        working-directory: release-assets
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wrapper-packages-${{ needs.prepare.outputs.tag }}
+          path: release-assets/*
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: true
+
+  tag:
+    name: Create release tag
+    needs: [prepare, ci, wrappers]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Create annotated tag
+        if: needs.prepare.outputs.create_tag == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ needs.prepare.outputs.tag }}"
+          previous_tag="${{ needs.prepare.outputs.previous_tag }}"
+          if [[ -n "$previous_tag" ]]; then
+            for attempt in {1..60}; do
+              if git ls-remote --exit-code --tags origin "refs/tags/$previous_tag" >/dev/null 2>&1; then
+                break
+              fi
+              if [[ "$attempt" == "60" ]]; then
+                echo "::error::previous release tag $previous_tag was not created"
+                exit 1
+              fi
+              sleep 10
+            done
+          fi
+          git fetch origin --tags
+          if git rev-parse --verify --quiet "refs/tags/$tag" >/dev/null; then
+            if [[ "$(git rev-list -n 1 "$tag")" == "$GITHUB_SHA" ]]; then
+              exit 0
+            fi
+            echo "::error::$tag was created for a different commit"
+            exit 1
+          fi
+          GIT_AUTHOR_NAME="github-actions[bot]" \
+          GIT_AUTHOR_EMAIL="41898282+github-actions[bot]@users.noreply.github.com" \
+          GIT_COMMITTER_NAME="github-actions[bot]" \
+          GIT_COMMITTER_EMAIL="41898282+github-actions[bot]@users.noreply.github.com" \
+            git tag -a "$tag" -m "Release $tag"
+          git push origin "$tag"
+
+  release:
+    name: Publish complete GitHub Release
+    needs: [prepare, ci, wrappers, tag]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22.x"
+          cache: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: wrapper-packages-${{ needs.prepare.outputs.tag }}
+          path: release-assets
       - run: go install github.com/goreleaser/goreleaser/v2@v2.12.0
-      - run: goreleaser release --clean
+      - run: goreleaser release --clean --skip=publish
+      - name: Create or resume draft release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if draft="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq .draft 2>/dev/null)"; then
+            if [[ "$draft" != "true" ]]; then
+              echo "::error::$TAG is already published"
+              exit 1
+            fi
+          else
+            gh release create "$TAG" --draft --verify-tag --title "$TAG" --generate-notes
+          fi
+      - name: Upload complete release inventory
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          binary_assets=(dist/*.tar.gz dist/*.zip dist/checksums.txt)
+          wrapper_assets=(release-assets/*)
+          if [[ ${#binary_assets[@]} -ne 7 ]]; then
+            echo "::error::expected six binary archives and one checksum file"
+            exit 1
+          fi
+          gh release upload "$TAG" "${binary_assets[@]}" "${wrapper_assets[@]}" --clobber
+      - name: Publish draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        shell: bash
+        run: |
+          release_id="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq .id)"
+          gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" -F draft=false -f make_latest=legacy
