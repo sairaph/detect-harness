@@ -21,10 +21,8 @@ struct FakeBinary {
 impl FakeBinary {
     fn new(response: &str, exit_code: i32) -> Self {
         let id = NEXT_FAKE.fetch_add(1, Ordering::Relaxed);
-        let directory = std::env::temp_dir().join(format!(
-            "detect-harness-rust-{}-{id}",
-            std::process::id()
-        ));
+        let directory =
+            std::env::temp_dir().join(format!("detect-harness-rust-{}-{id}", std::process::id()));
         fs::create_dir_all(&directory).unwrap();
         let executable = directory.join("fake-detect-harness");
         let request = directory.join("request.json");
