@@ -634,7 +634,7 @@ fn read_bounded(
             return Ok(output);
         }
         let previous = output_bytes.fetch_add(count, Ordering::AcqRel);
-        if previous > limit.saturating_sub(count) {
+        if count > limit || previous > limit - count {
             return Err(ReadFailure::TooLarge);
         }
         output.extend_from_slice(&buffer[..count]);
