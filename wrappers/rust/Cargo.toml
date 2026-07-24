@@ -2,7 +2,7 @@
 name = "detect-harness"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.70"
+rust-version = "1.71"
 description = "Thin Rust wrapper for the detect-harness companion binary"
 license = "MIT"
 authors = ["Łael Al-Halawani <laelhalawani@gmail.com>"]
