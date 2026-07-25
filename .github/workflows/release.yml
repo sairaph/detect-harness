@@ -97,6 +97,14 @@ jobs:
             if git rev-parse --verify --quiet "refs/tags/$tag" >/dev/null; then
               tagged_commit="$(git rev-list -n 1 "$tag")"
               if [[ "$tagged_commit" != "$expected_commit" ]]; then
+                if git merge-base --is-ancestor "$tagged_commit" HEAD; then
+                  echo "release=false" >> "$GITHUB_OUTPUT"
+                  echo "create_tag=false" >> "$GITHUB_OUTPUT"
+                  echo "tag=$tag" >> "$GITHUB_OUTPUT"
+                  echo "version=$version" >> "$GITHUB_OUTPUT"
+                  echo "previous_tag=" >> "$GITHUB_OUTPUT"
+                  exit 0
+                fi
                 echo "::error::$tag already points to a different commit"
                 exit 1
               fi
