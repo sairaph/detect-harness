@@ -436,15 +436,28 @@ impl Client {
         }
 
         let binary = select_binary(self.binary.as_deref(), env::var_os("DETECT_HARNESS_BIN"));
-        let mut child = Command::new(&binary)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|source| Error::Spawn {
-                binary: PathBuf::from(binary.clone()),
-                source,
-            })?;
+        let mut attempt = 0;
+        let mut child = loop {
+            match Command::new(&binary)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+            {
+                Ok(child) => break child,
+                Err(source) => {
+                    if cfg!(unix) && source.raw_os_error() == Some(26) && attempt < 4 {
+                        attempt += 1;
+                        thread::sleep(Duration::from_millis(10));
+                        continue;
+                    }
+                    return Err(Error::Spawn {
+                        binary: PathBuf::from(binary.clone()),
+                        source,
+                    });
+                }
+            }
+        };
 
         let stdin = child
             .stdin
