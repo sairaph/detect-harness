@@ -25,6 +25,7 @@ impl FakeBinary {
             std::env::temp_dir().join(format!("detect-harness-rust-{}-{id}", std::process::id()));
         fs::create_dir_all(&directory).unwrap();
         let executable = directory.join("fake-detect-harness");
+        let temporary = directory.join("fake-detect-harness.tmp");
         let request = directory.join("request.json");
         let script = format!(
             "#!/bin/sh\n[ \"$#\" -eq 0 ] || exit 97\nIFS= read -r request\nprintf '%s' \"$request\" > {}\nprintf '%s\\n' {}\nexit {}\n",
@@ -32,10 +33,11 @@ impl FakeBinary {
             shell_quote(Path::new(response)),
             exit_code
         );
-        fs::write(&executable, script).unwrap();
-        let mut permissions = fs::metadata(&executable).unwrap().permissions();
+        fs::write(&temporary, script).unwrap();
+        let mut permissions = fs::metadata(&temporary).unwrap().permissions();
         permissions.set_mode(0o755);
-        fs::set_permissions(&executable, permissions).unwrap();
+        fs::set_permissions(&temporary, permissions).unwrap();
+        fs::rename(temporary, &executable).unwrap();
         Self {
             directory,
             executable,
