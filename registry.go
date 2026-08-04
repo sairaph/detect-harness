@@ -71,6 +71,8 @@ func claudeDesktopConfig(_ hostSystem, environment runtimeEnvironment) pathResol
 		return available(environment.appSupport("Claude", "claude_desktop_config.json"))
 	case "windows":
 		return joinResolution(environment.appData(), "Claude", "claude_desktop_config.json")
+	case "linux":
+		return joinResolution(environment.xdgConfig(), "Claude", "claude_desktop_config.json")
 	default:
 		return pathResolution{reason: "Claude Desktop has no supported Linux config path"}
 	}
@@ -312,7 +314,7 @@ var registry = []harnessDefinition{
 		Harness: Harness{ID: Cline, Name: "Cline", ReloadHint: "restart the server in Cline's MCP panel"},
 		format:  formatJSON, topKey: "mcpServers", entry: entryStandard, config: clineConfig,
 		detect: func(s hostSystem, r runtimeEnvironment) probeResult {
-			return combineProbes(resolvedProbe(s, clineConfig(s, r)), probeExtension(s, r, "saoudrizwan.claude-dev-"))
+			return combineProbes(resolvedProbe(s, clineConfig(s, r)), probeExtension(s, r, "saoudrizwan.claude-dev-"), probePath(s, r.home(".cline", "mcp.json")))
 		},
 	},
 	{
@@ -346,7 +348,7 @@ var registry = []harnessDefinition{
 			return available(r.home(".aws", "amazonq", "mcp.json"))
 		},
 		detect: func(s hostSystem, r runtimeEnvironment) probeResult {
-			return combineProbes(probeCommand(s, r, "q"), probeCommand(s, r, "qchat"), probePath(s, r.home(".aws", "amazonq")))
+			return combineProbes(probeCommand(s, r, "q"), probeCommand(s, r, "qchat"), probePath(s, r.home(".aws", "amazonq")), probePath(s, r.home(".aws", "amazonq", "cli-agents")))
 		},
 		project: &projectDefinition{resolve: projectFile(".amazonq/mcp.json")},
 	},
@@ -373,7 +375,7 @@ var registry = []harnessDefinition{
 		Harness: Harness{
 			ID: OpenCode, Name: "OpenCode", ReloadHint: "restart OpenCode",
 			Project: &ProjectScope{
-				Path:       "opencode.json",
+				Path:       "opencode.json[c]",
 				ReloadHint: "restart OpenCode",
 				Lifecycle:  "opencode.json (or opencode.jsonc) at the project root. Safe to pre-create; OpenCode reads and deep-merges it with global config, walking from the working directory to the git root. It never overwrites an existing file.",
 				Shareable:  true,

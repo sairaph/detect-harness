@@ -92,7 +92,7 @@ def project_scope(directory: str) -> Scope:
     """Build a project scope targeting directory. Raises ValueError if empty."""
     if not isinstance(directory, str) or not directory.strip():
         raise ValueError("project scope requires a directory")
-    return Scope(mode="project", dir=directory)
+    return Scope(mode="project", dir=directory.strip())
 
 
 @dataclass(frozen=True, slots=True)

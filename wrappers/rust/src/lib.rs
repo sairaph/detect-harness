@@ -13,6 +13,15 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+#[cfg(unix)]
+extern "C" {
+    fn setpgid(pid: i32, pgid: i32) -> i32;
+    fn kill(pid: i32, sig: i32) -> i32;
+}
+
+#[cfg(unix)]
+const SIGKILL: i32 = 9;
+
 pub const PROTOCOL_VERSION: u32 = 1;
 pub const DEFAULT_BINARY: &str = "detect-harness";
 pub const DEFAULT_MAX_OUTPUT_BYTES: usize = 32 << 20;
@@ -313,6 +322,7 @@ pub enum Error {
     InvalidResponse(&'static str),
     Protocol(ProtocolError),
     InvalidScope(String),
+    InvalidArgument(String),
     ProcessFailed {
         code: Option<i32>,
         stderr: String,
@@ -355,6 +365,7 @@ impl fmt::Display for Error {
             }
             Self::Protocol(error) => write!(formatter, "companion error: {error}"),
             Self::InvalidScope(reason) => write!(formatter, "invalid scope: {reason}"),
+            Self::InvalidArgument(reason) => write!(formatter, "invalid argument: {reason}"),
             Self::ProcessFailed { code, stderr } => {
                 write!(formatter, "companion process failed")?;
                 if let Some(code) = code {
@@ -412,16 +423,20 @@ impl Client {
         }
     }
 
-    pub fn max_output_bytes(mut self, max_output_bytes: usize) -> Self {
-        assert!(max_output_bytes > 0, "max_output_bytes must be positive");
+    pub fn max_output_bytes(mut self, max_output_bytes: usize) -> Result<Self> {
+        if max_output_bytes == 0 {
+            return Err(Error::InvalidArgument("max_output_bytes must be positive".into()));
+        }
         self.max_output_bytes = max_output_bytes;
-        self
+        Ok(self)
     }
 
-    pub fn timeout(mut self, timeout: Duration) -> Self {
-        assert!(!timeout.is_zero(), "timeout must be positive");
+    pub fn timeout(mut self, timeout: Duration) -> Result<Self> {
+        if timeout.is_zero() {
+            return Err(Error::InvalidArgument("timeout must be positive".into()));
+        }
         self.timeout = Some(timeout);
-        self
+        Ok(self)
     }
 
     pub fn detect(&self) -> Result<Vec<Detection>> {
@@ -586,11 +601,16 @@ impl Client {
         let binary = select_binary(self.binary.as_deref(), env::var_os("DETECT_HARNESS_BIN"));
         let mut attempt = 0;
         let mut child = loop {
-            match Command::new(&binary)
-                .stdin(Stdio::piped())
+            let mut cmd = Command::new(&binary);
+            cmd.stdin(Stdio::piped())
                 .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn()
+                .stderr(Stdio::piped());
+            #[cfg(unix)]
+            {
+                use std::os::unix::process::CommandExt;
+                unsafe { cmd.pre_exec(|| { setpgid(0, 0); Ok(()) }); }
+            }
+            match cmd.spawn()
             {
                 Ok(child) => break child,
                 Err(source) => {
@@ -743,7 +763,7 @@ enum Operation {
 }
 
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 struct Response {
     #[serde(rename = "version")]
     _version: u32,
@@ -808,6 +828,24 @@ fn read_bounded(
     }
 }
 
+#[cfg(unix)]
+fn kill_process_group(pid: u32, sig: i32) {
+    unsafe { kill(-(pid as i32), sig); }
+}
+
+#[cfg(not(unix))]
+fn kill_process_group(pid: u32, _sig: i32) {
+    // On Windows we cannot easily kill the process group; skip.
+    let _ = pid;
+}
+
+fn kill_child_or_group(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    kill_process_group(child.id(), SIGKILL);
+    #[cfg(not(unix))]
+    let _ = child.kill();
+}
+
 fn wait_for_child(
     child: &mut std::process::Child,
     reader_failed: &AtomicBool,
@@ -816,7 +854,7 @@ fn wait_for_child(
     let started = Instant::now();
     loop {
         if reader_failed.load(Ordering::Acquire) {
-            let _ = child.kill();
+            kill_child_or_group(child);
             return child.wait().map_err(Error::Wait);
         }
         if let Some(status) = child.try_wait().map_err(Error::Wait)? {
@@ -824,7 +862,7 @@ fn wait_for_child(
         }
         if let Some(timeout) = timeout {
             if started.elapsed() >= timeout {
-                let _ = child.kill();
+                kill_child_or_group(child);
                 child.wait().map_err(Error::Wait)?;
                 return Err(Error::Timeout { timeout });
             }
@@ -923,5 +961,24 @@ mod tests {
         assert_eq!(value["harnesses"][0], "codex");
         assert_eq!(value["conflictPolicy"], "error");
         assert_eq!(value["dryRun"], true);
+    }
+
+    #[test]
+    fn roo_code_harness_id_round_trips() {
+        let id = HarnessId::RooCode;
+        let json = serde_json::to_string(&id).unwrap();
+        assert_eq!(json, "\"roo-code\"");
+        let back: HarnessId = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, id);
+    }
+
+    #[test]
+    fn render_request_includes_scope_when_provided() {
+        let server = StdioServer::new("example", "example-server");
+        let scope = Scope::project("/tmp/project").unwrap();
+        let request = Request::render(HarnessId::Cursor, &server, Some(&scope));
+        let value = serde_json::to_value(request).unwrap();
+        assert_eq!(value["scope"]["mode"], "project");
+        assert_eq!(value["scope"]["dir"], "/tmp/project");
     }
 }

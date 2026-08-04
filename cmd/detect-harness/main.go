@@ -107,7 +107,7 @@ func execute(ctx context.Context, request protocol.Request) (protocol.Response, 
 			}
 			canonical := detectharness.CanonicalID(id)
 			if _, duplicate := seen[canonical]; duplicate {
-				return protocol.Response{}, fmt.Errorf("duplicate harness %q", id)
+				return protocol.Response{}, fmt.Errorf("duplicate harness %q", canonical)
 			}
 			seen[canonical] = struct{}{}
 		}

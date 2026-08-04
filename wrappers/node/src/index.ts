@@ -63,7 +63,7 @@ export function projectScope(dir: string): Scope {
   if (typeof dir !== "string" || dir.trim() === "") {
     throw new TypeError("project scope requires a directory");
   }
-  return { mode: "project", dir };
+  return { mode: "project", dir: dir.trim() };
 }
 
 /** Project-scoped configuration support metadata for a harness. Informational. */
@@ -490,7 +490,7 @@ function applyScope(request: Request, scope: Scope | undefined): void {
   if (scope.mode !== "project" || typeof scope.dir !== "string" || scope.dir.trim() === "") {
     throw new TypeError("project scope requires a directory");
   }
-  request.scope = { mode: "project", dir: scope.dir };
+  request.scope = { mode: "project", dir: scope.dir.trim() };
 }
 
 function expectRecord(value: unknown, path: string): Record<string, unknown> {

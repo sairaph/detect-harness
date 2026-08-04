@@ -161,7 +161,7 @@ fn structured_errors_and_protocol_versions_are_checked() {
 #[test]
 fn output_is_bounded() {
     let fake = FakeBinary::new(r#"{"version":1,"ok":true,"detections":[]}"#, 0);
-    let error = fake.client().max_output_bytes(8).detect().unwrap_err();
+    let error = fake.client().max_output_bytes(8).unwrap().detect().unwrap_err();
     assert!(matches!(
         error,
         Error::OutputTooLarge {
@@ -187,4 +187,23 @@ fn project_scope_and_zoo_code() {
     let request = fake.request();
     assert_eq!(request["scope"]["mode"], "project");
     assert_eq!(request["scope"]["dir"], "/tmp/project");
+}
+
+#[test]
+fn roo_code_harness_id_is_accepted() {
+    let server = server();
+    let response = r#"{"version":1,"ok":true,"changes":[{"harnessId":"roo-code","name":"Zoo Code","desired":"present","state":"ready","action":"add"}]}"#;
+    let fake = FakeBinary::new(response, 0);
+    let changes = fake.client().plan(&[HarnessId::RooCode], DesiredState::Present, &server).unwrap();
+    assert_eq!(changes[0].harness_id, HarnessId::RooCode);
+}
+
+#[test]
+fn render_with_scope_includes_scope_in_request() {
+    let scope = Scope::project("/test").unwrap();
+    let fake = FakeBinary::new(r#"{"version":1,"ok":true,"config":"{}"}"#, 0);
+    let _config = fake.client().render_with_scope(HarnessId::Codex, &server(), &scope).unwrap();
+    let request = fake.request();
+    assert_eq!(request["scope"]["mode"], "project");
+    assert_eq!(request["scope"]["dir"], "/test");
 }

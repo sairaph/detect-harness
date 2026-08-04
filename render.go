@@ -596,6 +596,7 @@ func preserveFollowingComments(raw string, start, end int) int {
 }
 
 func renderYAMLChange(raw []byte, server StdioServer, desired DesiredState, allowReplace bool, bare bool) (ownership, []byte, string, error) {
+	raw = bytes.TrimPrefix(raw, []byte{0xEF, 0xBB, 0xBF})
 	document := &yaml.Node{}
 	fresh := len(bytes.TrimSpace(raw)) == 0
 	if fresh {

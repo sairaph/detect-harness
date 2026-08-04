@@ -138,3 +138,16 @@ test("project scope flows into requests and responses, and zoo-code is accepted"
 
   assert.throws(() => projectScope("  "), TypeError);
 });
+
+test("roo-code harness is accepted", async () => {
+  const client = new DetectHarnessClient({ binaryPath: fakeBinary });
+  const changes = await client.plan(["roo-code"], "present", server);
+  assert.equal(changes[0].harnessId, "roo-code");
+});
+
+test("render_with_scope includes scope in request", async () => {
+  const client = new DetectHarnessClient({ binaryPath: fakeBinary });
+  const scope = projectScope("/tmp/project");
+  const rendered = JSON.parse(await client.render("cursor", server, scope));
+  assert.equal(rendered.harness, "cursor");
+});

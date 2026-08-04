@@ -118,6 +118,15 @@ class ClientTests(unittest.TestCase):
         self.assertIsInstance(result, Scope)
         self.assertIsInstance(ProjectScope(path="p", reload_hint="r", lifecycle="l", shareable=True, trust_gate=False), ProjectScope)
 
+    def test_roo_code_harness_is_accepted(self) -> None:
+        changes = self.client.plan(("roo-code",), "present", self.server)
+        self.assertEqual(changes[0].harness_id, "roo-code")
+
+    def test_render_with_scope(self) -> None:
+        scope = project_scope("/tmp/project")
+        rendered = json.loads(self.client.render("cursor", self.server, scope))
+        self.assertEqual(rendered["harness"], "cursor")
+
 
 if __name__ == "__main__":
     unittest.main()

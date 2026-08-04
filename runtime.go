@@ -248,7 +248,7 @@ func acquireConfigLock(path string) (func(), error) {
 		if time.Since(info.ModTime()) <= staleAfter {
 			return nil, errors.New("another detect-harness operation holds the config lock")
 		}
-		if removeErr := os.Remove(path); removeErr != nil {
+		if removeErr := os.Remove(path); removeErr != nil && !errors.Is(removeErr, fs.ErrNotExist) {
 			return nil, fmt.Errorf("remove stale config lock: %w", removeErr)
 		}
 	}

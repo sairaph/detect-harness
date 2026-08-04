@@ -131,7 +131,7 @@ convention), but it is flagged in the catalog.
   project files are meant to be committed (claude-code, cursor, zed, vscode,
   opencode) while others are local-only.
 
-## Proposed design (Go)
+## Design (Go)
 
 ### Scope
 
@@ -183,7 +183,7 @@ hit from a project hit.
 
 `RenderConfig(harness, server)` stays. Add `RenderConfigScoped(harness, server,
 scope)`. Project scope returns the rendered project file for that harness
-(`Continue` handled specially — see open decisions).
+(`Continue` handled specially — see Locked decisions).
 
 ### Unsupported scope
 
