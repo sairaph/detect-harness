@@ -99,6 +99,18 @@ func zooConfig(_ hostSystem, environment runtimeEnvironment) pathResolution {
 	}
 }
 
+func clineConfig(_ hostSystem, environment runtimeEnvironment) pathResolution {
+	parts := []string{"Code", "User", "globalStorage", "saoudrizwan.claude-dev", "settings", "cline_mcp_settings.json"}
+	switch environment.platform {
+	case "darwin":
+		return available(environment.appSupport(parts...))
+	case "windows":
+		return joinResolution(environment.appData(), parts...)
+	default:
+		return joinResolution(environment.xdgConfig(), parts...)
+	}
+}
+
 func openCodeDirectory(environment runtimeEnvironment) pathResolution {
 	if environment.platform == "windows" {
 		return joinResolution(environment.appData(), "opencode")
@@ -298,12 +310,9 @@ var registry = []harnessDefinition{
 	},
 	{
 		Harness: Harness{ID: Cline, Name: "Cline", ReloadHint: "restart the server in Cline's MCP panel"},
-		format:  formatJSON, topKey: "mcpServers", entry: entryStandard,
-		config: func(_ hostSystem, r runtimeEnvironment) pathResolution {
-			return available(r.home(".cline", "data", "settings", "cline_mcp_settings.json"))
-		},
+		format:  formatJSON, topKey: "mcpServers", entry: entryStandard, config: clineConfig,
 		detect: func(s hostSystem, r runtimeEnvironment) probeResult {
-			return combineProbes(probePath(s, r.home(".cline")), probeExtension(s, r, "saoudrizwan.claude-dev-"))
+			return combineProbes(resolvedProbe(s, clineConfig(s, r)), probeExtension(s, r, "saoudrizwan.claude-dev-"))
 		},
 	},
 	{
