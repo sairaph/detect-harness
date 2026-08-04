@@ -46,7 +46,7 @@ impl Scope {
 }
 
 /// Project-scoped configuration support metadata. Informational.
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectScope {
     pub path: String,
@@ -887,6 +887,7 @@ mod tests {
             &server,
             ConflictPolicy::Error,
             true,
+            None,
         );
         let value = serde_json::to_value(request).unwrap();
         assert_eq!(value["version"], PROTOCOL_VERSION);
