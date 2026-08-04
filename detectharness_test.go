@@ -608,3 +608,60 @@ func TestCanonicalIDExported(t *testing.T) {
 		t.Fatalf("CanonicalID(cursor) = %s, want cursor", got)
 	}
 }
+
+func TestOpenCodeConfigRejectsAmbiguousFiles(t *testing.T) {
+	installer, home := testInstaller(t)
+	opencodeDir := filepath.Join(home, ".config", "opencode")
+	if err := os.MkdirAll(opencodeDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(opencodeDir, "opencode.jsonc"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(opencodeDir, "opencode.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	detections := installer.Detect(context.Background())
+	for _, d := range detections {
+		if d.ID == OpenCode && d.ConfigError == "" {
+			t.Fatalf("expected OpenCode config error when both files exist, got detection: %#v", d)
+		}
+	}
+}
+
+func TestRenderConfigScopedWithProjectScope(t *testing.T) {
+	server := testServer()
+	config, err := RenderConfigScoped(ClaudeCode, server, ProjectScopeDir("/tmp"))
+	if err != nil {
+		t.Fatalf("RenderConfigScoped with project scope: %v", err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(config), &doc); err != nil {
+		t.Fatalf("RenderConfigScoped output is invalid JSON: %v\n%s", err, config)
+	}
+	if _, ok := doc["mcpServers"].(map[string]any)[server.Name]; !ok {
+		t.Fatalf("RenderConfigScoped missing mcpServers entry: %#v", doc)
+	}
+	if _, err := RenderConfigScoped(ClaudeDesktop, server, ProjectScopeDir("/tmp")); err == nil {
+		t.Fatal("expected error for unsupported project scope")
+	}
+}
+
+func TestSymlinkConfigIsRejected(t *testing.T) {
+	installer, home := testInstaller(t)
+	config := filepath.Join(home, ".cursor", "mcp.json")
+	if err := os.MkdirAll(filepath.Dir(config), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(home, "real-config")
+	if err := os.WriteFile(target, []byte(`{"mcpServers":{}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, config); err != nil {
+		t.Fatal(err)
+	}
+	change := installer.Plan(context.Background(), []ID{Cursor}, Present, PlanOptions{}).Changes()[0]
+	if change.State != ChangeUnavailable || !strings.Contains(change.Reason, "symbolic link") {
+		t.Fatalf("expected symlink rejection, got: %#v", change)
+	}
+}

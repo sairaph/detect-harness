@@ -74,7 +74,7 @@ func claudeDesktopConfig(_ hostSystem, environment runtimeEnvironment) pathResol
 	case "linux":
 		return joinResolution(environment.xdgConfig(), "Claude", "claude_desktop_config.json")
 	default:
-		return pathResolution{reason: "Claude Desktop has no supported Linux config path"}
+		return pathResolution{reason: "Claude Desktop is not supported on this platform"}
 	}
 }
 
