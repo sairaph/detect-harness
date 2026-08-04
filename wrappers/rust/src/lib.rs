@@ -425,7 +425,9 @@ impl Client {
 
     pub fn max_output_bytes(mut self, max_output_bytes: usize) -> Result<Self> {
         if max_output_bytes == 0 {
-            return Err(Error::InvalidArgument("max_output_bytes must be positive".into()));
+            return Err(Error::InvalidArgument(
+                "max_output_bytes must be positive".into(),
+            ));
         }
         self.max_output_bytes = max_output_bytes;
         Ok(self)
@@ -608,10 +610,14 @@ impl Client {
             #[cfg(unix)]
             {
                 use std::os::unix::process::CommandExt;
-                unsafe { cmd.pre_exec(|| { setpgid(0, 0); Ok(()) }); }
+                unsafe {
+                    cmd.pre_exec(|| {
+                        setpgid(0, 0);
+                        Ok(())
+                    });
+                }
             }
-            match cmd.spawn()
-            {
+            match cmd.spawn() {
                 Ok(child) => break child,
                 Err(source) => {
                     if cfg!(unix) && source.raw_os_error() == Some(26) && attempt < 4 {
@@ -830,7 +836,9 @@ fn read_bounded(
 
 #[cfg(unix)]
 fn kill_process_group(pid: u32, sig: i32) {
-    unsafe { kill(-(pid as i32), sig); }
+    unsafe {
+        kill(-(pid as i32), sig);
+    }
 }
 
 #[cfg(not(unix))]
