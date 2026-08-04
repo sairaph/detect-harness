@@ -65,7 +65,7 @@ func (i *Installer) Plan(ctx context.Context, ids []ID, desired DesiredState, op
 	}
 	scope, scopeErr := options.Scope.normalize()
 	if scopeErr != nil {
-		return invalidSelectionPlan(ids, desired, scopeErr.Error(), options.Scope.Mode, options.Scope.Dir)
+		return invalidSelectionPlan(ids, desired, scopeErr.Error(), ScopeGlobal, "")
 	}
 	plan := &Plan{changes: make([]plannedChange, 0, len(ids))}
 	seen := make(map[ID]struct{}, len(ids))

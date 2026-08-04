@@ -40,10 +40,9 @@ with `Client::max_output_bytes`. The default conflict policy is `error`; use
 `ConflictPolicy::Replace`.
 
 `Client::timeout` adds a std-only timeout for request writing and process
-execution. It terminates and reaps the direct companion process. Rust's
-standard process API cannot portably create and terminate a process group, so
-descendants created by a misbehaving companion are not guaranteed to be
-terminated; Node and Python provide stronger POSIX process-group handling.
+execution. On Unix the companion runs in its own process group (via `setpgid`)
+and receives `SIGTERM` followed by `SIGKILL` after a 250 ms grace period,
+matching the Node and Python wrappers.
 
 `update` returns an `UpdateOutcome`; its `changes` are plans and its `results`
 contain one `UpdateResult` with a `ResultState` per selected harness.

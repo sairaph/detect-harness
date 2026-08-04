@@ -21,6 +21,8 @@ extern "C" {
 
 #[cfg(unix)]
 const SIGKILL: i32 = 9;
+const SIGTERM: i32 = 15;
+const TERMINATION_GRACE: Duration = Duration::from_millis(250);
 
 pub const PROTOCOL_VERSION: u32 = 1;
 pub const DEFAULT_BINARY: &str = "detect-harness";
@@ -612,7 +614,9 @@ impl Client {
                 use std::os::unix::process::CommandExt;
                 unsafe {
                     cmd.pre_exec(|| {
-                        setpgid(0, 0);
+                        if setpgid(0, 0) != 0 {
+                            return Err(io::Error::last_os_error());
+                        }
                         Ok(())
                     });
                 }
@@ -849,9 +853,15 @@ fn kill_process_group(pid: u32, _sig: i32) {
 
 fn kill_child_or_group(child: &mut std::process::Child) {
     #[cfg(unix)]
-    kill_process_group(child.id(), SIGKILL);
+    {
+        kill_process_group(child.id(), SIGTERM);
+        thread::sleep(TERMINATION_GRACE);
+        kill_process_group(child.id(), SIGKILL);
+    }
     #[cfg(not(unix))]
-    let _ = child.kill();
+    {
+        let _ = child.kill();
+    }
 }
 
 fn wait_for_child(

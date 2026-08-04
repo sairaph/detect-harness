@@ -135,7 +135,10 @@ func openCodeConfig(system hostSystem, environment runtimeEnvironment) pathResol
 	if jsoncState.state == Detected {
 		return available(jsonc)
 	}
-	if jsoncState.state == Unavailable {
+	if jsonState.state == Detected {
+		return available(json)
+	}
+	if jsoncState.state == Unavailable && jsonState.state != NotDetected {
 		return pathResolution{reason: jsoncState.reason}
 	}
 	if jsonState.state == Unavailable {
@@ -158,7 +161,10 @@ func openCodeProjectConfig(dir string, system hostSystem) pathResolution {
 	if jsoncState.state == Detected {
 		return available(jsonc)
 	}
-	if jsoncState.state == Unavailable {
+	if standardState.state == Detected {
+		return available(standard)
+	}
+	if jsoncState.state == Unavailable && standardState.state != NotDetected {
 		return pathResolution{reason: jsoncState.reason}
 	}
 	if standardState.state == Unavailable {
