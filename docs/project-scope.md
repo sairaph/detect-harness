@@ -131,13 +131,13 @@ convention), but it is flagged in the catalog.
   project files are meant to be committed (claude-code, cursor, zed, vscode,
   opencode) while others are local-only.
 
-## Design (Go)
+## Go API
 
 ### Scope
 
 ```go
 // Scope selects where configuration is detected and applied.
-// The zero value is global scope (today's behavior).
+// The zero value is global scope (preserves v0.1.x behavior).
 type Scope struct {
     Mode ScopeMode
     Dir  string // absolute project directory; required when Mode == ScopeProject
@@ -150,18 +150,19 @@ const (
     ScopeProject ScopeMode = "project"
 )
 
+// ProjectScopeDir builds a project scope targeting dir.
 func ProjectScopeDir(dir string) Scope { return Scope{Mode: ScopeProject, Dir: dir} }
 ```
 
-### Options (additive fields)
+### Options
 
-`DetectOptions` and `PlanOptions` each gain `Scope Scope`. Zero value = global.
-`Ensure`, `Plan`, `Apply`, `Detect` all become scope-aware through the options
-they already accept.
+`DetectOptions` and `PlanOptions` carry an optional `Scope` field. Zero value
+means global (unchanged from v0.1.x). `Ensure`, `Plan`, `Apply`, and `Detect`
+are scope-aware through these options.
 
-### Catalog metadata (information consumers need)
+### Catalog metadata
 
-`Harness` gains an optional `Project *ProjectScope` (nil for global-only):
+`Harness` has an optional `Project *ProjectScope` field (nil for global-only):
 
 ```go
 type ProjectScope struct {
@@ -173,30 +174,30 @@ type ProjectScope struct {
 }
 ```
 
-### Detection result (additive optional fields)
+### Detection result
 
-`Detection`, `Change`, and `Result` gain optional `Scope ScopeMode` and
-`ScopeDir string` (omitted when global), so consumers can distinguish a global
-hit from a project hit.
+`Detection`, `Change`, and `Result` carry optional `Scope ScopeMode` and
+`ScopeDir string` fields (omitted when global), so consumers can distinguish a
+global hit from a project hit.
 
 ### Rendering
 
-`RenderConfig(harness, server)` stays. Add `RenderConfigScoped(harness, server,
-scope)`. Project scope returns the rendered project file for that harness
-(`Continue` handled specially — see Locked decisions).
+`RenderConfig(harness, server)` renders a global config. `RenderConfigScoped(harness, server,
+scope)` renders a config for the given scope. Project scope returns the rendered
+project file for that harness (`Continue` produces a bare block file without
+config.yaml metadata — see Locked decisions).
 
 ### Unsupported scope
 
 For global-only harnesses (`claude-desktop`, `windsurf`, `cline`), project-scope
-`Detect` returns state `unavailable`, and `Plan`/`Apply` produce a `noop`/
-`skipped` change with a clear `Reason` ("harness has no project-scope config").
-Never an error that aborts a multi-harness run.
+`Detect` returns state `unavailable`, and `Plan`/`Apply` produce a `skipped`
+change with a clear `Reason`. Never an error that aborts a multi-harness run.
 
 ### Protocol / wrappers
 
-Add optional request field `scope: {mode, dir}` and optional response fields
-`scope`, `scopeDir`. Wire `version` remains `1`. Companion binary gains
-scope-aware request handling that ignores `scope` when absent.
+The optional `scope: {mode, dir}` request field and optional `scope`,
+`scopeDir`, and `project` response fields are additive — `version` remains `1`.
+An older companion binary ignores the `scope` field and returns global results.
 
 ## Locked decisions
 
