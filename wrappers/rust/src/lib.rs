@@ -34,14 +34,32 @@ pub enum ScopeMode {
 }
 
 impl Scope {
-    /// Build a project scope targeting `dir`. Panics if `dir` is empty.
-    pub fn project(dir: impl Into<String>) -> Self {
+    /// Build a project scope targeting `dir`. Returns an error if `dir` is empty
+    /// or whitespace-only.
+    pub fn project(dir: impl Into<String>) -> Result<Self> {
         let dir = dir.into();
-        assert!(!dir.is_empty(), "project scope requires a directory");
-        Self {
-            mode: ScopeMode::Project,
-            dir,
+        let trimmed = dir.trim().to_string();
+        if trimmed.is_empty() {
+            return Err(Error::InvalidScope(format!(
+                "project scope dir is empty or whitespace-only: {dir:?}"
+            )));
         }
+        Ok(Self {
+            mode: ScopeMode::Project,
+            dir: trimmed,
+        })
+    }
+
+    /// Validate that the scope fields are populated correctly. For project scopes
+    /// this checks that the directory is non-empty and non-whitespace.
+    pub fn validate(&self) -> Result<()> {
+        if self.mode == ScopeMode::Project && self.dir.trim().is_empty() {
+            return Err(Error::InvalidScope(format!(
+                "scope dir is empty or whitespace-only: {:?}",
+                self.dir
+            )));
+        }
+        Ok(())
     }
 }
 
@@ -294,6 +312,7 @@ pub enum Error {
     },
     InvalidResponse(&'static str),
     Protocol(ProtocolError),
+    InvalidScope(String),
     ProcessFailed {
         code: Option<i32>,
         stderr: String,
@@ -335,6 +354,7 @@ impl fmt::Display for Error {
                 write!(formatter, "invalid protocol response: {message}")
             }
             Self::Protocol(error) => write!(formatter, "companion error: {error}"),
+            Self::InvalidScope(reason) => write!(formatter, "invalid scope: {reason}"),
             Self::ProcessFailed { code, stderr } => {
                 write!(formatter, "companion process failed")?;
                 if let Some(code) = code {
@@ -412,6 +432,7 @@ impl Client {
     }
 
     pub fn detect_with_scope(&self, scope: &Scope) -> Result<Vec<Detection>> {
+        scope.validate()?;
         let response = self.invoke(&Request::detect(Some(scope)))?;
         response
             .detections
@@ -431,6 +452,7 @@ impl Client {
         server: &StdioServer,
         scope: &Scope,
     ) -> Result<String> {
+        scope.validate()?;
         let response = self.invoke(&Request::render(harness, server, Some(scope)))?;
         response
             .config
@@ -474,6 +496,9 @@ impl Client {
         conflict_policy: ConflictPolicy,
         scope: Option<&Scope>,
     ) -> Result<Vec<Change>> {
+        if let Some(s) = scope {
+            s.validate()?;
+        }
         let response = self.invoke(&Request::update(
             harnesses,
             desired,
@@ -529,6 +554,9 @@ impl Client {
         conflict_policy: ConflictPolicy,
         scope: Option<&Scope>,
     ) -> Result<UpdateOutcome> {
+        if let Some(s) = scope {
+            s.validate()?;
+        }
         let response = self.invoke(&Request::update(
             harnesses,
             desired,

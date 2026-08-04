@@ -54,18 +54,18 @@ func readSnapshot(system hostSystem, path string) (fileSnapshot, error) {
 // Plan inspects selected harnesses and computes changes without writing files.
 func (i *Installer) Plan(ctx context.Context, ids []ID, desired DesiredState, options PlanOptions) *Plan {
 	if desired != Present && desired != Absent {
-		return invalidSelectionPlan(ids, desired, "desired state must be present or absent")
+		return invalidSelectionPlan(ids, desired, "desired state must be present or absent", options.Scope.Mode, options.Scope.Dir)
 	}
 	policy := options.ConflictPolicy
 	if policy == "" {
 		policy = ConflictError
 	}
 	if policy != ConflictError && policy != ConflictReplace {
-		return invalidSelectionPlan(ids, desired, "conflict policy must be error or replace")
+		return invalidSelectionPlan(ids, desired, "conflict policy must be error or replace", options.Scope.Mode, options.Scope.Dir)
 	}
 	scope, scopeErr := options.Scope.normalize()
 	if scopeErr != nil {
-		return invalidSelectionPlan(ids, desired, scopeErr.Error())
+		return invalidSelectionPlan(ids, desired, scopeErr.Error(), options.Scope.Mode, options.Scope.Dir)
 	}
 	plan := &Plan{changes: make([]plannedChange, 0, len(ids))}
 	seen := make(map[ID]struct{}, len(ids))
@@ -135,10 +135,16 @@ func (i *Installer) Plan(ctx context.Context, ids []ID, desired DesiredState, op
 	return plan
 }
 
-func invalidSelectionPlan(ids []ID, desired DesiredState, reason string) *Plan {
+func invalidSelectionPlan(ids []ID, desired DesiredState, reason string, scope ScopeMode, scopeDir string) *Plan {
 	plan := &Plan{changes: make([]plannedChange, 0, len(ids))}
+	seen := make(map[ID]struct{}, len(ids))
 	for _, id := range ids {
-		plan.changes = append(plan.changes, plannedChange{Change: Change{HarnessID: CanonicalID(id), Desired: desired, State: ChangeUnavailable, Reason: reason}})
+		canonical := CanonicalID(id)
+		if _, dup := seen[canonical]; dup {
+			continue
+		}
+		seen[canonical] = struct{}{}
+		plan.changes = append(plan.changes, plannedChange{Change: Change{HarnessID: canonical, Desired: desired, State: ChangeUnavailable, Reason: reason, Scope: scope, ScopeDir: scopeDir}})
 	}
 	return plan
 }

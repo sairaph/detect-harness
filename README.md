@@ -93,7 +93,7 @@ permissions, and uninstall behavior.
 | `amazon-q` | Amazon Q Developer CLI | JSON `mcpServers` |
 | `continue` | Continue | YAML `mcpServers` list |
 | `opencode` | OpenCode | JSONC `mcp` local command |
-| `vscode` | VS Code / Copilot | JSONC `servers` with stdio type |
+| `vscode` | VS Code | JSONC `servers` with stdio type |
 
 ^ The deprecated `roo-code` id is accepted as an input alias and resolves to `zoo-code`.
 
@@ -250,6 +250,12 @@ binaries for macOS, Linux, and Windows on AMD64 and ARM64.
   five minutes are treated as stale and recovered.
 - Multi-harness changes report partial results instead of hiding failures.
 - Serialized protocol plans do not include complete user config contents.
+- `WriteFileAtomic` creates the parent directory chain if it does not exist, so
+  project scopes can write to paths like `.continue/mcpServers/` without
+  requiring prior directory setup.
+- Deprecated harness IDs (e.g. `"roo-code"`) are accepted as input and resolved
+  to their canonical replacement via `CanonicalID`. This ensures protocol-level
+  callers deduplicate IDs consistently with the registry.
 
 ## Build and test
 
@@ -287,7 +293,7 @@ version tag must match the root version and point to a commit on `main`.
 
 ## Transport support
 
-Version 1 manages local stdio MCP servers. Remote HTTP and SSE transports need
+Protocol version 1 manages local stdio MCP servers. Remote HTTP and SSE transports need
 client-specific capability handling and are intentionally not implied by the
 current API.
 

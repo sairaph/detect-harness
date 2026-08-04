@@ -49,7 +49,31 @@
             "required": ["changes"],
             "not": { "anyOf": [
               { "required": ["detections"] },
+              { "required": ["config"] },
+              { "required": ["results"] }
+            ] }
+          },
+          {
+            "required": ["results"],
+            "not": { "anyOf": [
+              { "required": ["detections"] },
+              { "required": ["config"] },
+              { "required": ["changes"] }
+            ] }
+          },
+          {
+            "required": ["changes", "results"],
+            "not": { "anyOf": [
+              { "required": ["detections"] },
               { "required": ["config"] }
+            ] }
+          },
+          {
+            "not": { "anyOf": [
+              { "required": ["detections"] },
+              { "required": ["config"] },
+              { "required": ["changes"] },
+              { "required": ["results"] }
             ] }
           }
         ]

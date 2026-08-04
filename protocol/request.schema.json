@@ -56,7 +56,7 @@
       "required": ["mode", "dir"],
       "properties": {
         "mode": { "const": "project" },
-        "dir": { "type": "string", "minLength": 1 }
+        "dir": { "type": "string", "minLength": 1, "pattern": "\\S" }
       }
     },
     "stdioServer": {

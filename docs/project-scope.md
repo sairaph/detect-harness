@@ -1,6 +1,6 @@
 # Project-scoped MCP configuration (v0.2.0 design)
 
-Status: **proposed** (not yet implemented). Non-breaking, additive change.
+Status: **implemented** in v0.2.0. Non-breaking, additive change.
 
 ## Goal
 
@@ -41,14 +41,14 @@ file before the tool ever runs in that directory?"
 | windsurf | **No** | — | `mcpServers` | — | — | n/a | refresh / restart |
 | zed | Yes | `.zed/settings.json` | `context_servers` | cwd | per-key deep; project wins | Yes | **live** (settings file watched) |
 | cline | **No** | — | `mcpServers` | — | — | n/a | watched (global only) |
-| roo-code | Yes | `.roo/mcp.json` | `mcpServers` | 1st workspace folder | additive; project wins per-name | Yes | **hot-reload** (file watched) |
+| zoo-code | Yes | `.roo/mcp.json` | `mcpServers` | 1st workspace folder | additive; project wins per-name | Yes | **hot-reload** (file watched) |
 | amazon-q | Yes | `.amazonq/mcp.json` | `mcpServers` | cwd only | additive per-server; workspace wins | Yes (`q mcp add` even auto-creates empty) | restart session |
 | continue | Yes | `.continue/mcpServers/*.{yaml,json}` (a **directory of block files**) | `mcpServers` (YAML **list**) | workspace dirs | concat + dedupe by name | Yes | save → hot-reload |
 | opencode | Yes | `opencode.json` / `opencode.jsonc` | `mcp` (object) | **cwd → git-root walk** | deep per-key; project wins | Yes | restart OpenCode |
 | vscode | Yes | `.vscode/mcp.json` | `servers` (+`inputs`) | cwd | additive union | Yes (trust gate) | code-lens / `MCP: List Servers` restart |
 
 **10 of 13** harnesses support project-scoped config. `claude-desktop`,
-`windsurf`, and `cline` are global-only and will report `unsupported` for
+`windsurf`, and `cline` are global-only and will report `unavailable` for
 project scope.
 
 Note: **Roo Code** was archived / discontinued by its maintainer in May 2026.
@@ -82,9 +82,10 @@ convention), but it is flagged in the catalog.
   **watches settings files live** — edits apply without a restart; changing a
   server entry restarts that server. A worktree-trust prompt on first open is
   independent of the file.
-- **roo-code**: `<workspace>/.roo/mcp.json`. Global file lives in VS Code
-  `globalStorage` (not `~/.roo/`); Roo never writes defaults into the project
-  file. **Hot-reloaded** via a `FileSystemWatcher` (debounced ~500 ms).
+- **zoo-code**: `<workspace>/.roo/mcp.json`. Global file lives in VS Code
+  `globalStorage` `ZooCodeOrganization.zoo-code` (not `~/.roo/`); Zoo Code never
+  writes defaults into the project file. **Hot-reloaded** via a
+  `FileSystemWatcher` (debounced ~500 ms).
 - **amazon-q**: `.amazonq/mcp.json` (legacy, loaded by default via the built-in
   agent's `useLegacyMcpJson: true`). `q mcp add --scope workspace` auto-creates
   `{ "mcpServers": {} }` if missing, otherwise reads → mutates → saves
@@ -149,7 +150,7 @@ const (
     ScopeProject ScopeMode = "project"
 )
 
-func ProjectScope(dir string) Scope { return Scope{Mode: ScopeProject, Dir: dir} }
+func ProjectScopeDir(dir string) Scope { return Scope{Mode: ScopeProject, Dir: dir} }
 ```
 
 ### Options (additive fields)
@@ -164,7 +165,6 @@ they already accept.
 
 ```go
 type ProjectScope struct {
-    Supported  bool     // always true when present; false omitted
     Path       string   // relative path within the project dir, e.g. ".mcp.json"
     ReloadHint string   // may differ from global
     Lifecycle  string   // creation / merge / preemptive-create behavior (human-readable)
@@ -181,14 +181,14 @@ hit from a project hit.
 
 ### Rendering
 
-`RenderConfig(harness, server)` stays. Add `RenderConfigFor(harness, server,
+`RenderConfig(harness, server)` stays. Add `RenderConfigScoped(harness, server,
 scope)`. Project scope returns the rendered project file for that harness
 (`Continue` handled specially — see open decisions).
 
 ### Unsupported scope
 
 For global-only harnesses (`claude-desktop`, `windsurf`, `cline`), project-scope
-`Detect` returns state `unsupported`, and `Plan`/`Apply` produce a `noop`/
+`Detect` returns state `unavailable`, and `Plan`/`Apply` produce a `noop`/
 `skipped` change with a clear `Reason` ("harness has no project-scope config").
 Never an error that aborts a multi-harness run.
 

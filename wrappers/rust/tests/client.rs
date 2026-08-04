@@ -173,7 +173,7 @@ fn output_is_bounded() {
 
 #[test]
 fn project_scope_and_zoo_code() {
-    let scope = Scope::project("/tmp/project");
+    let scope = Scope::project("/tmp/project").unwrap();
     let response = r#"{"version":1,"ok":true,"detections":[{"id":"zoo-code","name":"Zoo Code","reloadHint":"Restart Zoo Code","state":"present","evidence":["/fake/zoo"],"scope":"project","scopeDir":"/tmp/project","project":{"path":".roo/mcp.json","reloadHint":"Zoo Code hot-reloads","lifecycle":"Safe to pre-create","shareable":true,"trustGate":false}}]}"#;
     let fake = FakeBinary::new(response, 0);
     let detections = fake.client().detect_with_scope(&scope).unwrap();
