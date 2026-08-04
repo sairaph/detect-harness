@@ -989,4 +989,14 @@ mod tests {
         assert_eq!(value["scope"]["mode"], "project");
         assert_eq!(value["scope"]["dir"], "/tmp/project");
     }
+
+    #[test]
+    fn project_scope_rejects_empty_and_whitespace_dirs() {
+        assert!(matches!(Scope::project(""), Err(Error::InvalidScope(_))));
+        assert!(matches!(Scope::project("   "), Err(Error::InvalidScope(_))));
+        assert!(matches!(
+            Scope::project("\t\n"),
+            Err(Error::InvalidScope(_))
+        ));
+    }
 }

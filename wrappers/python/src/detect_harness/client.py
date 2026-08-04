@@ -302,9 +302,12 @@ class Client:
         except OSError as error:
             raise InvocationError(f"could not execute {binary!r}: {error}") from error
 
-        assert process.stdin is not None
-        assert process.stdout is not None
-        assert process.stderr is not None
+        if process.stdin is None:
+            raise InvocationError("companion stdin was not piped")
+        if process.stdout is None:
+            raise InvocationError("companion stdout was not piped")
+        if process.stderr is None:
+            raise InvocationError("companion stderr was not piped")
         stdout: list[bytes] = []
         stderr: list[bytes] = []
         lock = threading.Lock()
