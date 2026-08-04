@@ -20,6 +20,42 @@ const MAX_REQUEST_BYTES: usize = 1 << 20;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Scope {
+    pub mode: ScopeMode,
+    pub dir: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ScopeMode {
+    Project,
+}
+
+impl Scope {
+    /// Build a project scope targeting `dir`. Panics if `dir` is empty.
+    pub fn project(dir: impl Into<String>) -> Self {
+        let dir = dir.into();
+        assert!(!dir.is_empty(), "project scope requires a directory");
+        Self {
+            mode: ScopeMode::Project,
+            dir,
+        }
+    }
+}
+
+/// Project-scoped configuration support metadata. Informational.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectScope {
+    pub path: String,
+    pub reload_hint: String,
+    pub lifecycle: String,
+    pub shareable: bool,
+    pub trust_gate: bool,
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 pub enum HarnessId {
     #[serde(rename = "claude-desktop")]
@@ -40,6 +76,8 @@ pub enum HarnessId {
     Cline,
     #[serde(rename = "roo-code")]
     RooCode,
+    #[serde(rename = "zoo-code")]
+    ZooCode,
     #[serde(rename = "amazon-q")]
     AmazonQ,
     #[serde(rename = "continue")]
@@ -95,6 +133,12 @@ pub struct Detection {
     pub config_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config_error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<ScopeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope_dir: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<ProjectScope>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -147,6 +191,10 @@ pub struct Change {
     pub action: Option<ChangeAction>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<ScopeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope_dir: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -172,6 +220,10 @@ pub struct UpdateResult {
     pub action: Option<ChangeAction>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<ScopeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope_dir: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -353,14 +405,33 @@ impl Client {
     }
 
     pub fn detect(&self) -> Result<Vec<Detection>> {
-        let response = self.invoke(&Request::detect())?;
+        let response = self.invoke(&Request::detect(None))?;
+        response
+            .detections
+            .ok_or(Error::InvalidResponse("detect response omitted detections"))
+    }
+
+    pub fn detect_with_scope(&self, scope: &Scope) -> Result<Vec<Detection>> {
+        let response = self.invoke(&Request::detect(Some(scope)))?;
         response
             .detections
             .ok_or(Error::InvalidResponse("detect response omitted detections"))
     }
 
     pub fn render(&self, harness: HarnessId, server: &StdioServer) -> Result<String> {
-        let response = self.invoke(&Request::render(harness, server))?;
+        let response = self.invoke(&Request::render(harness, server, None))?;
+        response
+            .config
+            .ok_or(Error::InvalidResponse("render response omitted config"))
+    }
+
+    pub fn render_with_scope(
+        &self,
+        harness: HarnessId,
+        server: &StdioServer,
+        scope: &Scope,
+    ) -> Result<String> {
+        let response = self.invoke(&Request::render(harness, server, Some(scope)))?;
         response
             .config
             .ok_or(Error::InvalidResponse("render response omitted config"))
@@ -388,6 +459,28 @@ impl Client {
             server,
             conflict_policy,
             true,
+            None,
+        ))?;
+        response
+            .changes
+            .ok_or(Error::InvalidResponse("plan response omitted changes"))
+    }
+
+    pub fn plan_with_conflict_policy_and_scope(
+        &self,
+        harnesses: &[HarnessId],
+        desired: DesiredState,
+        server: &StdioServer,
+        conflict_policy: ConflictPolicy,
+        scope: Option<&Scope>,
+    ) -> Result<Vec<Change>> {
+        let response = self.invoke(&Request::update(
+            harnesses,
+            desired,
+            server,
+            conflict_policy,
+            true,
+            scope,
         ))?;
         response
             .changes
@@ -416,6 +509,33 @@ impl Client {
             server,
             conflict_policy,
             false,
+            None,
+        ))?;
+        Ok(UpdateOutcome {
+            changes: response
+                .changes
+                .ok_or(Error::InvalidResponse("update response omitted changes"))?,
+            results: response
+                .results
+                .ok_or(Error::InvalidResponse("update response omitted results"))?,
+        })
+    }
+
+    pub fn update_with_conflict_policy_and_scope(
+        &self,
+        harnesses: &[HarnessId],
+        desired: DesiredState,
+        server: &StdioServer,
+        conflict_policy: ConflictPolicy,
+        scope: Option<&Scope>,
+    ) -> Result<UpdateOutcome> {
+        let response = self.invoke(&Request::update(
+            harnesses,
+            desired,
+            server,
+            conflict_policy,
+            false,
+            scope,
         ))?;
         Ok(UpdateOutcome {
             changes: response
@@ -531,10 +651,12 @@ struct Request<'a> {
     conflict_policy: Option<ConflictPolicy>,
     #[serde(skip_serializing_if = "Option::is_none")]
     dry_run: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scope: Option<&'a Scope>,
 }
 
 impl<'a> Request<'a> {
-    fn detect() -> Self {
+    fn detect(scope: Option<&'a Scope>) -> Self {
         Self {
             version: PROTOCOL_VERSION,
             operation: Operation::Detect,
@@ -544,10 +666,11 @@ impl<'a> Request<'a> {
             desired: None,
             conflict_policy: None,
             dry_run: None,
+            scope,
         }
     }
 
-    fn render(harness: HarnessId, server: &'a StdioServer) -> Self {
+    fn render(harness: HarnessId, server: &'a StdioServer, scope: Option<&'a Scope>) -> Self {
         Self {
             version: PROTOCOL_VERSION,
             operation: Operation::Render,
@@ -557,6 +680,7 @@ impl<'a> Request<'a> {
             desired: None,
             conflict_policy: None,
             dry_run: None,
+            scope,
         }
     }
 
@@ -566,6 +690,7 @@ impl<'a> Request<'a> {
         server: &'a StdioServer,
         conflict_policy: ConflictPolicy,
         dry_run: bool,
+        scope: Option<&'a Scope>,
     ) -> Self {
         Self {
             version: PROTOCOL_VERSION,
@@ -576,6 +701,7 @@ impl<'a> Request<'a> {
             desired: Some(desired),
             conflict_policy: Some(conflict_policy),
             dry_run: Some(dry_run),
+            scope,
         }
     }
 }

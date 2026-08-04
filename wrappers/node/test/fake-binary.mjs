@@ -30,20 +30,25 @@ if (process.argv.length !== 2) {
   } else if (mode === "overflow") {
     process.stdout.write("x".repeat(4096));
   } else if (request.operation === "detect") {
-    process.stdout.write(JSON.stringify({
-      version: 1,
-      ok: true,
-      detections: [{ id: "cursor", name: "Cursor", reloadHint: "Reload Cursor", state: "present", evidence: ["/fake/cursor"] }],
-    }));
+    const detection = { id: "cursor", name: "Cursor", reloadHint: "Reload Cursor", state: "present", evidence: ["/fake/cursor"] };
+    if (request.scope?.mode === "project") {
+      detection.scope = "project";
+      detection.scopeDir = request.scope.dir;
+    }
+    process.stdout.write(JSON.stringify({ version: 1, ok: true, detections: [detection] }));
   } else if (request.operation === "render") {
     process.stdout.write(JSON.stringify({ version: 1, ok: true, config: JSON.stringify({ harness: request.harness, server: request.server }) }));
   } else if (request.operation === "update") {
+    const scopeFields = request.scope?.mode === "project"
+      ? { scope: "project", scopeDir: request.scope.dir }
+      : {};
     const changes = request.harnesses.map((harnessId) => ({
       harnessId,
       name: harnessId,
       desired: request.desired,
       state: request.dryRun ? "noop" : "ready",
       ...(request.dryRun ? { reason: request.conflictPolicy } : { action: "add" }),
+      ...scopeFields,
       before: "obsolete",
       after: "obsolete",
     }));

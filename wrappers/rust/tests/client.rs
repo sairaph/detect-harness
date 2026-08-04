@@ -2,7 +2,7 @@
 
 use detect_harness::{
     ChangeState, Client, ConflictPolicy, DesiredState, DetectionState, Error, HarnessId,
-    OutputStream, ResultState, StdioServer,
+    OutputStream, ResultState, Scope, ScopeMode, StdioServer,
 };
 use serde_json::Value;
 use std::fs;
@@ -169,4 +169,22 @@ fn output_is_bounded() {
             limit: 8
         }
     ));
+}
+
+#[test]
+fn project_scope_and_zoo_code() {
+    let scope = Scope::project("/tmp/project");
+    let response = r#"{"version":1,"ok":true,"detections":[{"id":"zoo-code","name":"Zoo Code","reloadHint":"Restart Zoo Code","state":"present","evidence":["/fake/zoo"],"scope":"project","scopeDir":"/tmp/project","project":{"path":".roo/mcp.json","reloadHint":"Zoo Code hot-reloads","lifecycle":"Safe to pre-create","shareable":true,"trustGate":false}}]}"#;
+    let fake = FakeBinary::new(response, 0);
+    let detections = fake.client().detect_with_scope(&scope).unwrap();
+    assert_eq!(detections[0].id, HarnessId::ZooCode);
+    assert_eq!(detections[0].scope, Some(ScopeMode::Project));
+    assert_eq!(detections[0].scope_dir.as_deref(), Some("/tmp/project"));
+    let project = detections[0].project.as_ref().expect("project metadata");
+    assert_eq!(project.path, ".roo/mcp.json");
+    assert_eq!(project.shareable, true);
+    assert_eq!(project.trust_gate, false);
+    let request = fake.request();
+    assert_eq!(request["scope"]["mode"], "project");
+    assert_eq!(request["scope"]["dir"], "/tmp/project");
 }

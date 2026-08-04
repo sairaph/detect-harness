@@ -68,9 +68,13 @@ func readRequest(reader io.Reader) (protocol.Request, error) {
 
 func execute(ctx context.Context, request protocol.Request) (protocol.Response, error) {
 	response := protocol.Response{Version: protocol.Version, OK: true}
+	scope := detectharness.Scope{}
+	if request.Scope != nil {
+		scope = *request.Scope
+	}
 	switch request.Operation {
 	case protocol.Detect:
-		detections, err := detectharness.DetectHarnesses(ctx, detectharness.DetectOptions{})
+		detections, err := detectharness.DetectHarnesses(ctx, detectharness.DetectOptions{Scope: scope})
 		if err != nil {
 			return protocol.Response{}, err
 		}
@@ -80,7 +84,7 @@ func execute(ctx context.Context, request protocol.Request) (protocol.Response, 
 		if request.Server == nil || request.Harness == "" {
 			return protocol.Response{}, errors.New("render requires server and harness")
 		}
-		config, err := detectharness.RenderConfig(request.Harness, *request.Server)
+		config, err := detectharness.RenderConfigScoped(request.Harness, *request.Server, scope)
 		if err != nil {
 			return protocol.Response{}, err
 		}
@@ -101,16 +105,17 @@ func execute(ctx context.Context, request protocol.Request) (protocol.Response, 
 			if !detectharness.IsSupported(id) {
 				return protocol.Response{}, fmt.Errorf("unknown harness %q", id)
 			}
-			if _, duplicate := seen[id]; duplicate {
+			canonical := detectharness.CanonicalID(id)
+			if _, duplicate := seen[canonical]; duplicate {
 				return protocol.Response{}, fmt.Errorf("duplicate harness %q", id)
 			}
-			seen[id] = struct{}{}
+			seen[canonical] = struct{}{}
 		}
 		installer, err := detectharness.New(*request.Server)
 		if err != nil {
 			return protocol.Response{}, err
 		}
-		plan := installer.Plan(ctx, request.Harnesses, request.Desired, detectharness.PlanOptions{ConflictPolicy: request.ConflictPolicy})
+		plan := installer.Plan(ctx, request.Harnesses, request.Desired, detectharness.PlanOptions{ConflictPolicy: request.ConflictPolicy, Scope: scope})
 		response.Changes = plan.Changes()
 		if !request.DryRun {
 			response.Results = installer.Apply(ctx, plan)

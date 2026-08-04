@@ -63,26 +63,35 @@ func (i *Installer) Plan(ctx context.Context, ids []ID, desired DesiredState, op
 	if policy != ConflictError && policy != ConflictReplace {
 		return invalidSelectionPlan(ids, desired, "conflict policy must be error or replace")
 	}
+	scope, scopeErr := options.Scope.normalize()
+	if scopeErr != nil {
+		return invalidSelectionPlan(ids, desired, scopeErr.Error())
+	}
 	plan := &Plan{changes: make([]plannedChange, 0, len(ids))}
 	seen := make(map[ID]struct{}, len(ids))
 	for _, id := range ids {
-		if _, duplicate := seen[id]; duplicate {
+		canonical := CanonicalID(id)
+		if _, duplicate := seen[canonical]; duplicate {
 			continue
 		}
-		seen[id] = struct{}{}
-		definition, found := registryByID[id]
+		seen[canonical] = struct{}{}
+		definition, found := definitionFor(id)
 		if !found {
 			plan.changes = append(plan.changes, plannedChange{Change: Change{HarnessID: id, Desired: desired, State: ChangeUnavailable, Reason: "unknown harness"}})
 			continue
 		}
-		change := plannedChange{Change: Change{HarnessID: id, Name: definition.Name, Desired: desired}}
+		change := plannedChange{Change: Change{HarnessID: definition.ID, Name: definition.Name, Desired: desired}}
+		if scope.Mode == ScopeProject {
+			change.Scope = ScopeProject
+			change.ScopeDir = scope.Dir
+		}
 		if err := ctx.Err(); err != nil {
 			change.State = ChangeUnavailable
 			change.Reason = err.Error()
 			plan.changes = append(plan.changes, change)
 			continue
 		}
-		resolved := definition.config(i.system, i.runtime)
+		resolved := definition.resolveConfig(scope, i.system, i.runtime)
 		if resolved.reason != "" {
 			change.State = ChangeUnavailable
 			change.Reason = resolved.reason
@@ -98,7 +107,7 @@ func (i *Installer) Plan(ctx context.Context, ids []ID, desired DesiredState, op
 			continue
 		}
 		change.snapshot = snapshot
-		state, after, action, err := renderChange(definition, snapshot.raw, i.server, desired, policy == ConflictReplace)
+		state, after, action, err := renderChange(definition, scope, snapshot.raw, i.server, desired, policy == ConflictReplace)
 		if err != nil {
 			change.State = ChangeUnavailable
 			change.Reason = err.Error()
@@ -129,7 +138,7 @@ func (i *Installer) Plan(ctx context.Context, ids []ID, desired DesiredState, op
 func invalidSelectionPlan(ids []ID, desired DesiredState, reason string) *Plan {
 	plan := &Plan{changes: make([]plannedChange, 0, len(ids))}
 	for _, id := range ids {
-		plan.changes = append(plan.changes, plannedChange{Change: Change{HarnessID: id, Desired: desired, State: ChangeUnavailable, Reason: reason}})
+		plan.changes = append(plan.changes, plannedChange{Change: Change{HarnessID: CanonicalID(id), Desired: desired, State: ChangeUnavailable, Reason: reason}})
 	}
 	return plan
 }
@@ -141,7 +150,7 @@ func (i *Installer) Apply(ctx context.Context, plan *Plan) []Result {
 	}
 	results := make([]Result, 0, len(plan.changes))
 	for _, change := range plan.changes {
-		result := Result{HarnessID: change.HarnessID, Name: change.Name, Path: change.Path, Desired: change.Desired, Action: change.Action}
+		result := Result{HarnessID: change.HarnessID, Name: change.Name, Path: change.Path, Desired: change.Desired, Action: change.Action, Scope: change.Scope, ScopeDir: change.ScopeDir}
 		switch change.State {
 		case ChangeNoop:
 			result.State = ApplyNoop

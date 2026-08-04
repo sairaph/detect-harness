@@ -14,6 +14,7 @@ export type HarnessId =
   | "zed"
   | "cline"
   | "roo-code"
+  | "zoo-code"
   | "amazon-q"
   | "continue"
   | "opencode"
@@ -25,6 +26,7 @@ export type DetectionState = "present" | "absent" | "unavailable";
 export type ChangeState = "ready" | "noop" | "conflict" | "unavailable";
 export type ResultState = "applied" | "noop" | "skipped" | "conflict" | "failed";
 export type ChangeAction = "add" | "update" | "remove";
+export type ScopeMode = "project";
 
 const HARNESS_IDS = [
   "claude-desktop",
@@ -36,6 +38,7 @@ const HARNESS_IDS = [
   "zed",
   "cline",
   "roo-code",
+  "zoo-code",
   "amazon-q",
   "continue",
   "opencode",
@@ -49,6 +52,29 @@ export interface StdioServer {
   env?: Record<string, string>;
 }
 
+/** Selects directory-local (project) configuration for harnesses that support it. */
+export interface Scope {
+  mode: ScopeMode;
+  dir: string;
+}
+
+/** Build a project scope targeting dir. Throws if dir is empty. */
+export function projectScope(dir: string): Scope {
+  if (typeof dir !== "string" || dir.trim() === "") {
+    throw new TypeError("project scope requires a directory");
+  }
+  return { mode: "project", dir };
+}
+
+/** Project-scoped configuration support metadata for a harness. Informational. */
+export interface ProjectScope {
+  path: string;
+  reloadHint: string;
+  lifecycle: string;
+  shareable: boolean;
+  trustGate: boolean;
+}
+
 export interface Detection {
   id: HarnessId;
   name: string;
@@ -58,6 +84,9 @@ export interface Detection {
   reason?: string;
   configPath?: string;
   configError?: string;
+  scope?: ScopeMode;
+  scopeDir?: string;
+  project?: ProjectScope;
 }
 
 export interface Change {
@@ -68,6 +97,8 @@ export interface Change {
   state: ChangeState;
   action?: ChangeAction;
   reason?: string;
+  scope?: ScopeMode;
+  scopeDir?: string;
 }
 
 export interface UpdateResult {
@@ -78,6 +109,8 @@ export interface UpdateResult {
   state: ResultState;
   action?: ChangeAction;
   reason?: string;
+  scope?: ScopeMode;
+  scopeDir?: string;
 }
 
 export interface UpdateOutcome {
@@ -96,6 +129,7 @@ export interface ClientOptions {
 
 export interface UpdateOptions {
   conflictPolicy?: ConflictPolicy;
+  scope?: Scope;
 }
 
 interface Request {
@@ -106,6 +140,7 @@ interface Request {
   harnesses?: readonly HarnessId[];
   desired?: DesiredState;
   conflictPolicy?: ConflictPolicy;
+  scope?: Scope;
   dryRun?: boolean;
 }
 
@@ -187,18 +222,22 @@ export class DetectHarnessClient {
     this.#timeoutMs = options.timeoutMs;
   }
 
-  async detect(): Promise<Detection[]> {
-    const response = await this.#invoke({ version: PROTOCOL_VERSION, operation: "detect" });
+  async detect(scope?: Scope): Promise<Detection[]> {
+    const request: Request = { version: PROTOCOL_VERSION, operation: "detect" };
+    applyScope(request, scope);
+    const response = await this.#invoke(request);
     return parseDetections(response.detections);
   }
 
-  async render(harness: HarnessId, server: StdioServer): Promise<string> {
-    const response = await this.#invoke({
+  async render(harness: HarnessId, server: StdioServer, scope?: Scope): Promise<string> {
+    const request: Request = {
       version: PROTOCOL_VERSION,
       operation: "render",
       harness,
       server,
-    });
+    };
+    applyScope(request, scope);
+    const response = await this.#invoke(request);
     return expectString(response.config, "response.config");
   }
 
@@ -208,7 +247,7 @@ export class DetectHarnessClient {
     server: StdioServer,
     options: UpdateOptions = {},
   ): Promise<Change[]> {
-    const response = await this.#invoke({
+    const request: Request = {
       version: PROTOCOL_VERSION,
       operation: "update",
       harnesses,
@@ -216,7 +255,9 @@ export class DetectHarnessClient {
       server,
       conflictPolicy: options.conflictPolicy ?? "error",
       dryRun: true,
-    });
+    };
+    applyScope(request, options.scope);
+    const response = await this.#invoke(request);
     return parseChanges(response.changes);
   }
 
@@ -226,14 +267,16 @@ export class DetectHarnessClient {
     server: StdioServer,
     options: UpdateOptions = {},
   ): Promise<UpdateOutcome> {
-    const response = await this.#invoke({
+    const request: Request = {
       version: PROTOCOL_VERSION,
       operation: "update",
       harnesses,
       desired,
       server,
       conflictPolicy: options.conflictPolicy ?? "error",
-    });
+    };
+    applyScope(request, options.scope);
+    const response = await this.#invoke(request);
     return {
       changes: parseChanges(response.changes),
       results: parseResults(response.results),
@@ -393,7 +436,9 @@ function parseDetections(value: unknown): Detection[] {
     expectString(item.reloadHint, `${path}.reloadHint`);
     expectEnum(item.state, ["present", "absent", "unavailable"] as const, `${path}.state`);
     expectOptionalStringArray(item.evidence, `${path}.evidence`);
-    expectOptionalStrings(item, ["reason", "configPath", "configError"], path);
+    expectOptionalStrings(item, ["reason", "configPath", "configError", "scopeDir"], path);
+    expectOptionalEnum(item, "scope", ["project"] as const, path);
+    expectOptionalProject(item, path);
     return item as unknown as Detection;
   });
 }
@@ -409,7 +454,8 @@ function parseChanges(value: unknown): Change[] {
     const action = item.action === undefined
       ? undefined
       : expectEnum(item.action, ["add", "update", "remove"] as const, `${path}.action`);
-    expectOptionalStrings(item, ["path", "reason"], path);
+    expectOptionalStrings(item, ["path", "reason", "scopeDir"], path);
+    expectOptionalEnum(item, "scope", ["project"] as const, path);
     return {
       harnessId,
       name,
@@ -418,6 +464,8 @@ function parseChanges(value: unknown): Change[] {
       ...(item.path === undefined ? {} : { path: item.path as string }),
       ...(action === undefined ? {} : { action }),
       ...(item.reason === undefined ? {} : { reason: item.reason as string }),
+      ...(item.scope === undefined ? {} : { scope: item.scope as ScopeMode }),
+      ...(item.scopeDir === undefined ? {} : { scopeDir: item.scopeDir as string }),
     };
   });
 }
@@ -431,9 +479,18 @@ function parseResults(value: unknown): UpdateResult[] {
     expectEnum(item.desired, ["present", "absent"] as const, `${path}.desired`);
     expectEnum(item.state, ["applied", "noop", "skipped", "conflict", "failed"] as const, `${path}.state`);
     if (item.action !== undefined) expectEnum(item.action, ["add", "update", "remove"] as const, `${path}.action`);
-    expectOptionalStrings(item, ["path", "reason"], path);
+    expectOptionalStrings(item, ["path", "reason", "scopeDir"], path);
+    expectOptionalEnum(item, "scope", ["project"] as const, path);
     return item as unknown as UpdateResult;
   });
+}
+
+function applyScope(request: Request, scope: Scope | undefined): void {
+  if (scope === undefined) return;
+  if (scope.mode !== "project" || typeof scope.dir !== "string" || scope.dir.trim() === "") {
+    throw new TypeError("project scope requires a directory");
+  }
+  request.scope = { mode: "project", dir: scope.dir };
 }
 
 function expectRecord(value: unknown, path: string): Record<string, unknown> {
@@ -464,6 +521,31 @@ function expectOptionalStrings(item: Record<string, unknown>, keys: string[], pa
   for (const key of keys) {
     if (item[key] !== undefined) expectString(item[key], `${path}.${key}`);
   }
+}
+
+function expectOptionalEnum<const T extends readonly string[]>(
+  item: Record<string, unknown>,
+  key: string,
+  allowed: T,
+  path: string,
+): void {
+  if (item[key] !== undefined) expectEnum(item[key], allowed, `${path}.${key}`);
+}
+
+function expectBoolean(value: unknown, path: string): boolean {
+  if (typeof value !== "boolean") throw new ProtocolValidationError(`${path} must be a boolean`);
+  return value;
+}
+
+function expectOptionalProject(item: Record<string, unknown>, path: string): void {
+  if (item.project === undefined) return;
+  const projectPath = `${path}.project`;
+  const project = expectRecord(item.project, projectPath);
+  expectString(project.path, `${projectPath}.path`);
+  expectString(project.reloadHint, `${projectPath}.reloadHint`);
+  expectString(project.lifecycle, `${projectPath}.lifecycle`);
+  expectBoolean(project.shareable, `${projectPath}.shareable`);
+  expectBoolean(project.trustGate, `${projectPath}.trustGate`);
 }
 
 function expectOptionalStringArray(value: unknown, path: string): void {

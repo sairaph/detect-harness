@@ -402,3 +402,209 @@ func TestDetectionReturnsEvidenceAndResolvedPaths(t *testing.T) {
 	}
 	t.Fatal("Cursor detection missing")
 }
+
+func TestSupportedCatalogExposesProjectMetadata(t *testing.T) {
+	supported := make(map[ID]Harness, len(Supported()))
+	for _, harness := range Supported() {
+		supported[harness.ID] = harness
+	}
+	for _, id := range []ID{ClaudeCode, Cursor, Codex, GeminiCLI, Zed, ZooCode, AmazonQ, Continue, OpenCode, VSCode} {
+		harness, ok := supported[id]
+		if !ok || harness.Project == nil || harness.Project.Path == "" || harness.Project.ReloadHint == "" || harness.Project.Lifecycle == "" {
+			t.Fatalf("missing project metadata for %s: %#v", id, harness)
+		}
+	}
+	for _, id := range []ID{ClaudeDesktop, Windsurf, Cline} {
+		if harness, ok := supported[id]; ok && harness.Project != nil {
+			t.Fatalf("global-only harness %s should not advertise project scope: %#v", id, harness)
+		}
+	}
+}
+
+func TestZooCodeReplacesRooCode(t *testing.T) {
+	if !IsSupported(RooCode) || !IsSupported(ZooCode) {
+		t.Fatal("both the roo-code alias and zoo-code id must be supported")
+	}
+	for _, harness := range Supported() {
+		if harness.ID == RooCode {
+			t.Fatalf("roo-code must not appear in the canonical catalog: %#v", harness)
+		}
+		if harness.ID == ZooCode && (harness.Name != "Zoo Code" || harness.Project == nil || harness.Project.Path != ".roo/mcp.json") {
+			t.Fatalf("unexpected zoo-code catalog entry: %#v", harness)
+		}
+	}
+	installer, _ := testInstaller(t)
+	globalChange := installer.Plan(context.Background(), []ID{RooCode}, Present, PlanOptions{}).Changes()[0]
+	if globalChange.HarnessID != ZooCode {
+		t.Fatalf("roo-code alias did not resolve to zoo-code: %#v", globalChange)
+	}
+	project := t.TempDir()
+	projectChange := installer.Plan(context.Background(), []ID{RooCode}, Present, PlanOptions{Scope: ProjectScopeDir(project)}).Changes()[0]
+	if projectChange.HarnessID != ZooCode || projectChange.Path != filepath.Join(project, ".roo", "mcp.json") {
+		t.Fatalf("unexpected zoo-code project plan: %#v", projectChange)
+	}
+}
+
+func TestProjectScopePlanApplyRoundTrip(t *testing.T) {
+	installer, _ := testInstaller(t)
+	project := t.TempDir()
+	scope := ProjectScopeDir(project)
+	ids := []ID{ClaudeCode, Cursor, Codex, GeminiCLI, Zed, ZooCode, AmazonQ, Continue, OpenCode, VSCode}
+	ctx := context.Background()
+
+	plan := installer.Plan(ctx, ids, Present, PlanOptions{Scope: scope})
+	for _, change := range plan.Changes() {
+		if change.State != ChangeReady || change.Scope != ScopeProject || change.ScopeDir != project {
+			t.Fatalf("unexpected project add plan: %#v", change)
+		}
+		if change.Path == "" || !strings.HasPrefix(change.Path, project) {
+			t.Fatalf("project change did not target the project dir: %#v", change)
+		}
+	}
+	for _, result := range installer.Apply(ctx, plan) {
+		if result.State != Applied || result.Scope != ScopeProject {
+			t.Fatalf("project apply failed: %#v", result)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(project, ".mcp.json")); err != nil {
+		t.Fatalf("claude-code project file was not written: %v", err)
+	}
+
+	for _, change := range installer.Plan(ctx, ids, Present, PlanOptions{Scope: scope}).Changes() {
+		if change.State != ChangeNoop {
+			t.Fatalf("project present plan was not idempotent: %#v", change)
+		}
+	}
+
+	removePlan := installer.Plan(ctx, ids, Absent, PlanOptions{Scope: scope})
+	for _, result := range installer.Apply(ctx, removePlan) {
+		if result.State != Applied {
+			t.Fatalf("project remove failed: %#v", result)
+		}
+	}
+	for _, change := range installer.Plan(ctx, ids, Absent, PlanOptions{Scope: scope}).Changes() {
+		if change.State != ChangeNoop {
+			t.Fatalf("project absent plan was not idempotent: %#v", change)
+		}
+	}
+}
+
+func TestContinueProjectBlockIsBare(t *testing.T) {
+	installer, _ := testInstaller(t)
+	project := t.TempDir()
+	plan := installer.Plan(context.Background(), []ID{Continue}, Present, PlanOptions{Scope: ProjectScopeDir(project)})
+	blockPath := filepath.Join(project, ".continue", "mcpServers", "detect-harness.yaml")
+	if change := plan.Changes()[0]; change.State != ChangeReady || change.Path != blockPath {
+		t.Fatalf("unexpected continue project plan: %#v", plan.Changes()[0])
+	}
+	if result := installer.Apply(context.Background(), plan)[0]; result.State != Applied {
+		t.Fatalf("continue project apply failed: %#v", result)
+	}
+	raw, err := os.ReadFile(blockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(raw, []byte("Local Config")) || bytes.Contains(raw, []byte("version:")) || bytes.Contains(raw, []byte("schema:")) {
+		t.Fatalf("continue project block file should omit config.yaml metadata:\n%s", raw)
+	}
+	if !bytes.Contains(raw, []byte("mcpServers")) {
+		t.Fatalf("continue project block file missing mcpServers:\n%s", raw)
+	}
+}
+
+func TestProjectScopeUnsupportedHarnessIsSkipped(t *testing.T) {
+	installer, _ := testInstaller(t)
+	project := t.TempDir()
+	ids := []ID{ClaudeDesktop, Windsurf, Cline}
+	plan := installer.Plan(context.Background(), ids, Present, PlanOptions{Scope: ProjectScopeDir(project)})
+	for _, change := range plan.Changes() {
+		if change.State != ChangeUnavailable || change.Reason == "" {
+			t.Fatalf("expected unsupported project scope to be unavailable: %#v", change)
+		}
+	}
+	for _, result := range installer.Apply(context.Background(), plan) {
+		if result.State != ApplySkipped {
+			t.Fatalf("expected unsupported project scope to be skipped: %#v", result)
+		}
+	}
+}
+
+func TestInvalidProjectScopeIsRejected(t *testing.T) {
+	installer, _ := testInstaller(t)
+	change := installer.Plan(context.Background(), []ID{Cursor}, Present, PlanOptions{Scope: Scope{Mode: ScopeProject}}).Changes()[0]
+	if change.State != ChangeUnavailable || !strings.Contains(change.Reason, "requires a directory") {
+		t.Fatalf("expected invalid scope to be rejected: %#v", change)
+	}
+	if _, err := DetectHarnesses(context.Background(), DetectOptions{Scope: Scope{Mode: ScopeProject}}); err == nil {
+		t.Fatal("expected DetectHarnesses to reject an invalid project scope")
+	}
+}
+
+func TestProjectScopeDetectsProjectFile(t *testing.T) {
+	project := t.TempDir()
+	options := func() DetectOptions {
+		return DetectOptions{
+			Platform: "linux",
+			HomeDir:  t.TempDir(),
+			Env:      map[string]string{"PATH": "", "XDG_CONFIG_HOME": filepath.Join(project, "xdg")},
+			Scope:    ProjectScopeDir(project),
+		}
+	}
+	absent, err := DetectHarnesses(context.Background(), options())
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, detection := range absent {
+		if detection.ID != ClaudeCode {
+			continue
+		}
+		found = true
+		if detection.State != NotDetected || detection.ConfigPath != filepath.Join(project, ".mcp.json") || detection.Scope != ScopeProject {
+			t.Fatalf("unexpected absent project detection: %#v", detection)
+		}
+	}
+	if !found {
+		t.Fatal("claude-code project detection missing")
+	}
+	if err := os.WriteFile(filepath.Join(project, ".mcp.json"), []byte(`{"mcpServers":{}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	present, err := DetectHarnesses(context.Background(), options())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, detection := range present {
+		if detection.ID != ClaudeCode {
+			continue
+		}
+		if detection.State != Detected || len(detection.Evidence) == 0 {
+			t.Fatalf("unexpected present project detection: %#v", detection)
+		}
+		return
+	}
+	t.Fatal("claude-code present project detection missing")
+}
+
+func TestAliasDeduplicationIsCanonical(t *testing.T) {
+	installer, _ := testInstaller(t)
+	// Both ids resolve to the same canonical harness; Plan should deduplicate
+	// silently and emit one change with the canonical id.
+	plan := installer.Plan(context.Background(), []ID{RooCode, ZooCode}, Present, PlanOptions{})
+	changes := plan.Changes()
+	if len(changes) != 1 {
+		t.Fatalf("expected 1 deduplicated change, got %d: %#v", len(changes), changes)
+	}
+	if changes[0].HarnessID != ZooCode {
+		t.Fatalf("expected canonical zoo-code, got %s", changes[0].HarnessID)
+	}
+}
+
+func TestCanonicalIDExported(t *testing.T) {
+	if got := CanonicalID(RooCode); got != ZooCode {
+		t.Fatalf("CanonicalID(roo-code) = %s, want zoo-code", got)
+	}
+	if got := CanonicalID(Cursor); got != Cursor {
+		t.Fatalf("CanonicalID(cursor) = %s, want cursor", got)
+	}
+}

@@ -14,9 +14,12 @@ from detect_harness import (  # noqa: E402
     Client,
     InvocationError,
     OutputLimitError,
+    ProjectScope,
     ProtocolError,
     ProtocolValidationError,
+    Scope,
     StdioServer,
+    project_scope,
 )
 
 FAKE_BINARY = pathlib.Path(__file__).with_name("fake_binary.py")
@@ -94,6 +97,26 @@ class ClientTests(unittest.TestCase):
             with self.assertRaises(OutputLimitError):
                 Client(binary_path=FAKE_BINARY, max_output_bytes=256).detect()
         self.assertLess(time.monotonic() - started, 2)
+
+    def test_project_scope_and_zoo_code(self) -> None:
+        scope = project_scope("/tmp/project")
+        detection = self.client.detect(scope)[0]
+        self.assertEqual(detection.scope, "project")
+        self.assertEqual(detection.scope_dir, "/tmp/project")
+
+        changes = self.client.plan(
+            ("zoo-code",), "present", self.server, scope=scope
+        )
+        self.assertEqual(changes[0].scope, "project")
+        self.assertEqual(changes[0].scope_dir, "/tmp/project")
+        self.assertEqual(changes[0].harness_id, "zoo-code")
+
+        with self.assertRaises(ValueError):
+            project_scope("  ")
+
+        result = project_scope("/x")
+        self.assertIsInstance(result, Scope)
+        self.assertIsInstance(ProjectScope(path="p", reload_hint="r", lifecycle="l", shareable=True, trust_gate=False), ProjectScope)
 
 
 if __name__ == "__main__":

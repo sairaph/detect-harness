@@ -37,14 +37,21 @@ if mode == "wrong-version":
 elif mode == "overflow":
     sys.stdout.write("x" * 4096)
 elif request["operation"] == "detect":
-    print(json.dumps({
-        "version": 1,
-        "ok": True,
-        "detections": [{"id": "cursor", "name": "Cursor", "reloadHint": "Reload Cursor", "state": "present", "evidence": ["/fake/cursor"]}],
-    }))
+    detection = {"id": "cursor", "name": "Cursor", "reloadHint": "Reload Cursor", "state": "present", "evidence": ["/fake/cursor"]}
+    scope = request.get("scope")
+    if isinstance(scope, dict) and scope.get("mode") == "project":
+        detection["scope"] = "project"
+        detection["scopeDir"] = scope.get("dir")
+    print(json.dumps({"version": 1, "ok": True, "detections": [detection]}))
 elif request["operation"] == "render":
     print(json.dumps({"version": 1, "ok": True, "config": json.dumps({"harness": request["harness"], "server": request["server"]})}))
 elif request["operation"] == "update":
+    scope = request.get("scope")
+    scope_fields = (
+        {"scope": "project", "scopeDir": scope.get("dir")}
+        if isinstance(scope, dict) and scope.get("mode") == "project"
+        else {}
+    )
     changes = [
         {
             "harnessId": harness,
@@ -56,6 +63,7 @@ elif request["operation"] == "update":
                 if request.get("dryRun")
                 else {"action": "add"}
             ),
+            **scope_fields,
             "before": "obsolete",
             "after": "obsolete",
         }

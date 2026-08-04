@@ -24,6 +24,7 @@ HarnessId: TypeAlias = Literal[
     "zed",
     "cline",
     "roo-code",
+    "zoo-code",
     "amazon-q",
     "continue",
     "opencode",
@@ -35,6 +36,7 @@ DetectionState: TypeAlias = Literal["present", "absent", "unavailable"]
 ChangeState: TypeAlias = Literal["ready", "noop", "conflict", "unavailable"]
 ResultState: TypeAlias = Literal["applied", "noop", "skipped", "conflict", "failed"]
 ChangeAction: TypeAlias = Literal["add", "update", "remove"]
+ScopeMode: TypeAlias = Literal["project"]
 _HARNESS_IDS = (
     "claude-desktop",
     "claude-code",
@@ -45,6 +47,7 @@ _HARNESS_IDS = (
     "zed",
     "cline",
     "roo-code",
+    "zoo-code",
     "amazon-q",
     "continue",
     "opencode",
@@ -75,6 +78,35 @@ class StdioServer:
 
 
 @dataclass(frozen=True, slots=True)
+class Scope:
+    """Selects directory-local (project) configuration for supported harnesses."""
+
+    mode: ScopeMode
+    dir: str
+
+    def _protocol_value(self) -> dict[str, object]:
+        return {"mode": self.mode, "dir": self.dir}
+
+
+def project_scope(directory: str) -> Scope:
+    """Build a project scope targeting directory. Raises ValueError if empty."""
+    if not isinstance(directory, str) or not directory.strip():
+        raise ValueError("project scope requires a directory")
+    return Scope(mode="project", dir=directory)
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectScope:
+    """Project-scoped configuration support metadata. Informational."""
+
+    path: str
+    reload_hint: str
+    lifecycle: str
+    shareable: bool
+    trust_gate: bool
+
+
+@dataclass(frozen=True, slots=True)
 class Detection:
     id: HarnessId
     name: str
@@ -84,6 +116,9 @@ class Detection:
     reason: str | None = None
     config_path: str | None = None
     config_error: str | None = None
+    scope: ScopeMode | None = None
+    scope_dir: str | None = None
+    project: ProjectScope | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,6 +130,8 @@ class Change:
     path: str | None = None
     action: ChangeAction | None = None
     reason: str | None = None
+    scope: ScopeMode | None = None
+    scope_dir: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,6 +143,8 @@ class UpdateResult:
     path: str | None = None
     action: ChangeAction | None = None
     reason: str | None = None
+    scope: ScopeMode | None = None
+    scope_dir: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -179,19 +218,23 @@ class Client:
         self._max_output_bytes = max_output_bytes
         self._timeout = timeout
 
-    def detect(self) -> tuple[Detection, ...]:
-        response = self._invoke({"version": PROTOCOL_VERSION, "operation": "detect"})
+    def detect(self, scope: Scope | None = None) -> tuple[Detection, ...]:
+        request: dict[str, object] = {"version": PROTOCOL_VERSION, "operation": "detect"}
+        _apply_scope(request, scope)
+        response = self._invoke(request)
         return _parse_detections(response.get("detections"))
 
-    def render(self, harness: HarnessId, server: StdioServer) -> str:
-        response = self._invoke(
-            {
-                "version": PROTOCOL_VERSION,
-                "operation": "render",
-                "harness": harness,
-                "server": server._protocol_value(),
-            }
-        )
+    def render(
+        self, harness: HarnessId, server: StdioServer, scope: Scope | None = None
+    ) -> str:
+        request: dict[str, object] = {
+            "version": PROTOCOL_VERSION,
+            "operation": "render",
+            "harness": harness,
+            "server": server._protocol_value(),
+        }
+        _apply_scope(request, scope)
+        response = self._invoke(request)
         return _expect_string(response.get("config"), "response.config")
 
     def plan(
@@ -201,8 +244,9 @@ class Client:
         server: StdioServer,
         *,
         conflict_policy: ConflictPolicy = "error",
+        scope: Scope | None = None,
     ) -> tuple[Change, ...]:
-        request = self._update_request(harnesses, desired, server, conflict_policy)
+        request = self._update_request(harnesses, desired, server, conflict_policy, scope)
         request["dryRun"] = True
         response = self._invoke(request)
         return _parse_changes(response.get("changes"))
@@ -214,9 +258,10 @@ class Client:
         server: StdioServer,
         *,
         conflict_policy: ConflictPolicy = "error",
+        scope: Scope | None = None,
     ) -> UpdateOutcome:
         response = self._invoke(
-            self._update_request(harnesses, desired, server, conflict_policy)
+            self._update_request(harnesses, desired, server, conflict_policy, scope)
         )
         return UpdateOutcome(
             changes=_parse_changes(response.get("changes")),
@@ -229,6 +274,7 @@ class Client:
         desired: DesiredState,
         server: StdioServer,
         conflict_policy: ConflictPolicy,
+        scope: Scope | None,
     ) -> dict[str, object]:
         request: dict[str, object] = {
             "version": PROTOCOL_VERSION,
@@ -238,6 +284,7 @@ class Client:
             "server": server._protocol_value(),
         }
         request["conflictPolicy"] = conflict_policy
+        _apply_scope(request, scope)
         return request
 
     def _invoke(self, request: Mapping[str, object]) -> dict[str, Any]:
@@ -431,6 +478,12 @@ def _parse_detections(value: object) -> tuple[Detection, ...]:
                 reason=_optional_member_string(item, "reason", path),
                 config_path=_optional_member_string(item, "configPath", path),
                 config_error=_optional_member_string(item, "configError", path),
+                scope=cast(
+                    ScopeMode | None,
+                    _optional_member_enum(item, "scope", ("project",), path),
+                ),
+                scope_dir=_optional_member_string(item, "scopeDir", path),
+                project=_optional_project(item, path),
             )
         )
     return tuple(detections)
@@ -455,6 +508,11 @@ def _parse_changes(value: object) -> tuple[Change, ...]:
                     ),
                 ),
                 reason=_optional_member_string(item, "reason", path),
+                scope=cast(
+                    ScopeMode | None,
+                    _optional_member_enum(item, "scope", ("project",), path),
+                ),
+                scope_dir=_optional_member_string(item, "scopeDir", path),
             )
         )
     return tuple(changes)
@@ -479,9 +537,37 @@ def _parse_results(value: object) -> tuple[UpdateResult, ...]:
                     ),
                 ),
                 reason=_optional_member_string(item, "reason", path),
+                scope=cast(
+                    ScopeMode | None,
+                    _optional_member_enum(item, "scope", ("project",), path),
+                ),
+                scope_dir=_optional_member_string(item, "scopeDir", path),
             )
         )
     return tuple(results)
+
+
+def _apply_scope(request: dict[str, object], scope: Scope | None) -> None:
+    if scope is None:
+        return
+    if scope.mode != "project" or not str(scope.dir).strip():
+        raise ValueError("project scope requires a directory")
+    request["scope"] = scope._protocol_value()
+
+
+def _optional_project(item: Mapping[str, object], path: str) -> ProjectScope | None:
+    if "project" not in item:
+        return None
+    raw = item["project"]
+    field_path = f"{path}.project"
+    record = _expect_record(raw, field_path)
+    return ProjectScope(
+        path=_expect_string(record.get("path"), f"{field_path}.path"),
+        reload_hint=_expect_string(record.get("reloadHint"), f"{field_path}.reloadHint"),
+        lifecycle=_expect_string(record.get("lifecycle"), f"{field_path}.lifecycle"),
+        shareable=_expect_bool(record.get("shareable"), f"{field_path}.shareable"),
+        trust_gate=_expect_bool(record.get("trustGate"), f"{field_path}.trustGate"),
+    )
 
 
 def _expect_record(value: object, path: str) -> dict[str, Any]:
@@ -499,6 +585,12 @@ def _expect_list(value: object, path: str) -> list[object]:
 def _expect_string(value: object, path: str) -> str:
     if not isinstance(value, str):
         raise ProtocolValidationError(f"{path} must be a string")
+    return value
+
+
+def _expect_bool(value: object, path: str) -> bool:
+    if not isinstance(value, bool):
+        raise ProtocolValidationError(f"{path} must be a boolean")
     return value
 
 

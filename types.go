@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -20,7 +21,8 @@ const (
 	Windsurf      ID = "windsurf"
 	Zed           ID = "zed"
 	Cline         ID = "cline"
-	RooCode       ID = "roo-code"
+	RooCode       ID = "roo-code" // Deprecated: canonical id is ZooCode; kept as an alias for backward compatibility.
+	ZooCode       ID = "zoo-code"
 	AmazonQ       ID = "amazon-q"
 	Continue      ID = "continue"
 	OpenCode      ID = "opencode"
@@ -65,6 +67,71 @@ type Harness struct {
 	ID         ID     `json:"id"`
 	Name       string `json:"name"`
 	ReloadHint string `json:"reloadHint"`
+	// Project describes project-scoped (directory-local) configuration support.
+	// It is nil for harnesses that only support a global configuration.
+	Project *ProjectScope `json:"project,omitempty"`
+}
+
+// ProjectScope describes how a harness supports directory-local MCP
+// configuration. It is informational metadata for library consumers building
+// install UX; detect-harness never creates files unless asked to plan/apply.
+type ProjectScope struct {
+	// Path is the canonical project file location relative to the project
+	// directory (for example ".mcp.json").
+	Path string `json:"path"`
+	// ReloadHint describes how a user picks up project-scope changes.
+	ReloadHint string `json:"reloadHint"`
+	// Lifecycle summarizes creation, merge, and preemptive-create behavior.
+	Lifecycle string `json:"lifecycle"`
+	// Shareable indicates the file is intended to be committed to version control.
+	Shareable bool `json:"shareable"`
+	// TrustGate indicates the harness gates project servers behind a trust or
+	// approval dialog before they are loaded.
+	TrustGate bool `json:"trustGate"`
+}
+
+// ScopeMode selects the configuration scope.
+type ScopeMode string
+
+const (
+	// ScopeGlobal is the zero-value scope: system/user configuration used today.
+	// It matches existing global behavior exactly.
+	ScopeGlobal ScopeMode = ""
+	// ScopeProject targets a directory-local (per-project) configuration.
+	ScopeProject ScopeMode = "project"
+)
+
+// Scope selects where configuration is detected and applied. The zero value is
+// global scope and preserves existing behavior.
+type Scope struct {
+	Mode ScopeMode `json:"mode,omitempty"`
+	// Dir is the project directory. It is required when Mode is ScopeProject and
+	// ignored otherwise. Relative paths are resolved against the process work
+	// directory. Absolute paths are recommended.
+	Dir string `json:"dir,omitempty"`
+}
+
+// ProjectScope returns a scope that targets directory-local configuration in dir.
+func ProjectScopeDir(dir string) Scope { return Scope{Mode: ScopeProject, Dir: dir} }
+
+// normalize validates the scope and resolves the project directory to an
+// absolute path. The global zero-value scope is always valid.
+func (s Scope) normalize() (Scope, error) {
+	switch s.Mode {
+	case ScopeGlobal:
+		return Scope{}, nil
+	case ScopeProject:
+		if strings.TrimSpace(s.Dir) == "" {
+			return Scope{}, errors.New("project scope requires a directory")
+		}
+		absolute, err := filepath.Abs(s.Dir)
+		if err != nil {
+			return Scope{}, fmt.Errorf("resolve project directory: %w", err)
+		}
+		return Scope{Mode: ScopeProject, Dir: absolute}, nil
+	default:
+		return Scope{}, fmt.Errorf("unsupported scope mode %q", s.Mode)
+	}
 }
 
 // DetectionState distinguishes absence from an environment that could not be inspected.
@@ -84,6 +151,8 @@ type Detection struct {
 	Reason      string         `json:"reason,omitempty"`
 	ConfigPath  string         `json:"configPath,omitempty"`
 	ConfigError string         `json:"configError,omitempty"`
+	Scope       ScopeMode      `json:"scope,omitempty"`
+	ScopeDir    string         `json:"scopeDir,omitempty"`
 }
 
 // DetectOptions overrides the host environment. It is primarily useful for tests and sandboxes.
@@ -91,6 +160,8 @@ type DetectOptions struct {
 	Platform string
 	HomeDir  string
 	Env      map[string]string
+	// Scope selects global (zero value) or project-scoped detection.
+	Scope Scope
 }
 
 // DesiredState describes the registration state a plan should establish.
@@ -112,6 +183,8 @@ const (
 // PlanOptions controls planning without performing writes.
 type PlanOptions struct {
 	ConflictPolicy ConflictPolicy
+	// Scope selects global (zero value) or project-scoped planning.
+	Scope Scope
 }
 
 // ChangeState is the outcome of planning one harness.
@@ -133,6 +206,8 @@ type Change struct {
 	State     ChangeState  `json:"state"`
 	Action    string       `json:"action,omitempty"`
 	Reason    string       `json:"reason,omitempty"`
+	Scope     ScopeMode    `json:"scope,omitempty"`
+	ScopeDir  string       `json:"scopeDir,omitempty"`
 	Before    string       `json:"-"`
 	After     string       `json:"-"`
 }
@@ -175,6 +250,8 @@ type Result struct {
 	State     ApplyState   `json:"state"`
 	Action    string       `json:"action,omitempty"`
 	Reason    string       `json:"reason,omitempty"`
+	Scope     ScopeMode    `json:"scope,omitempty"`
+	ScopeDir  string       `json:"scopeDir,omitempty"`
 }
 
 // Option customizes an Installer.

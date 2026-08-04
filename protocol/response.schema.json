@@ -63,7 +63,20 @@
       "properties": {
         "id": { "$ref": "#/$defs/harnessId" },
         "name": { "type": "string" },
-        "reloadHint": { "type": "string" }
+        "reloadHint": { "type": "string" },
+        "project": { "$ref": "#/$defs/projectScope" }
+      }
+    },
+    "projectScope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "reloadHint", "lifecycle", "shareable", "trustGate"],
+      "properties": {
+        "path": { "type": "string" },
+        "reloadHint": { "type": "string" },
+        "lifecycle": { "type": "string" },
+        "shareable": { "type": "boolean" },
+        "trustGate": { "type": "boolean" }
       }
     },
     "detection": {
@@ -77,7 +90,9 @@
             "evidence": { "type": "array", "items": { "type": "string" } },
             "reason": { "type": "string" },
             "configPath": { "type": "string" },
-            "configError": { "type": "string" }
+            "configError": { "type": "string" },
+            "scope": { "const": "project" },
+            "scopeDir": { "type": "string" }
           }
         }
       ]
@@ -92,7 +107,9 @@
         "desired": { "enum": ["present", "absent"] },
         "state": { "enum": ["ready", "noop", "conflict", "unavailable"] },
         "action": { "enum": ["add", "update", "remove"] },
-        "reason": { "type": "string" }
+        "reason": { "type": "string" },
+        "scope": { "const": "project" },
+        "scopeDir": { "type": "string" }
       }
     },
     "result": {
@@ -105,7 +122,9 @@
         "desired": { "enum": ["present", "absent"] },
         "state": { "enum": ["applied", "noop", "skipped", "conflict", "failed"] },
         "action": { "enum": ["add", "update", "remove"] },
-        "reason": { "type": "string" }
+        "reason": { "type": "string" },
+        "scope": { "const": "project" },
+        "scopeDir": { "type": "string" }
       }
     },
     "error": {
@@ -128,6 +147,7 @@
         "zed",
         "cline",
         "roo-code",
+        "zoo-code",
         "amazon-q",
         "continue",
         "opencode",

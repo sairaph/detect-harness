@@ -96,14 +96,14 @@ func normalizeValue(value any) any {
 	}
 }
 
-func renderChange(definition harnessDefinition, raw []byte, server StdioServer, desired DesiredState, allowReplace bool) (ownership, []byte, string, error) {
+func renderChange(definition harnessDefinition, scope Scope, raw []byte, server StdioServer, desired DesiredState, allowReplace bool) (ownership, []byte, string, error) {
 	switch definition.format {
 	case formatJSON, formatJSONC:
 		return renderJSONChange(definition, raw, server, desired, allowReplace)
 	case formatTOML:
 		return renderTOMLChange(raw, server, desired, allowReplace)
 	case formatYAMLList:
-		return renderYAMLChange(raw, server, desired, allowReplace)
+		return renderYAMLChange(raw, server, desired, allowReplace, scope.Mode == ScopeProject)
 	default:
 		return "", nil, "", fmt.Errorf("unsupported config format %q", definition.format)
 	}
@@ -595,7 +595,7 @@ func preserveFollowingComments(raw string, start, end int) int {
 	return start + offset
 }
 
-func renderYAMLChange(raw []byte, server StdioServer, desired DesiredState, allowReplace bool) (ownership, []byte, string, error) {
+func renderYAMLChange(raw []byte, server StdioServer, desired DesiredState, allowReplace bool, bare bool) (ownership, []byte, string, error) {
 	document := &yaml.Node{}
 	fresh := len(bytes.TrimSpace(raw)) == 0
 	if fresh {
@@ -618,7 +618,7 @@ func renderYAMLChange(raw []byte, server StdioServer, desired DesiredState, allo
 		return "", nil, "", errors.New("YAML configuration root must be a map")
 	}
 	root := document.Content[0]
-	if fresh && desired == Present {
+	if fresh && desired == Present && !bare {
 		setYAMLScalar(root, "name", "Local Config")
 		setYAMLScalar(root, "version", "0.0.1")
 		setYAMLScalar(root, "schema", "v1")
@@ -741,16 +741,31 @@ func actionFor(state ownership, desired DesiredState) string {
 	return "update"
 }
 
-// RenderConfig generates a complete configuration containing only server for
-// one harness. It does not inspect or mutate the filesystem.
+// RenderConfig generates a complete global configuration containing only server
+// for one harness. It does not inspect or mutate the filesystem.
 func RenderConfig(id ID, server StdioServer) (string, error) {
+	return RenderConfigScoped(id, server, Scope{})
+}
+
+// RenderConfigScoped generates a complete configuration containing only server
+// for one harness in the requested scope. For project scope it targets the
+// harness's directory-local file; the directory itself is not inspected or
+// created. An unsupported project scope returns an error.
+func RenderConfigScoped(id ID, server StdioServer, scope Scope) (string, error) {
 	if err := server.validate(); err != nil {
 		return "", err
 	}
-	definition, found := registryByID[id]
+	normalized, err := scope.normalize()
+	if err != nil {
+		return "", err
+	}
+	definition, found := definitionFor(id)
 	if !found {
 		return "", fmt.Errorf("unknown harness %q", id)
 	}
-	_, output, _, err := renderChange(definition, nil, server, Present, false)
+	if normalized.Mode == ScopeProject && definition.project == nil {
+		return "", fmt.Errorf("%s has no project-scope configuration", definition.Name)
+	}
+	_, output, _, err := renderChange(definition, normalized, nil, server, Present, false)
 	return string(output), err
 }

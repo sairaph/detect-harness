@@ -24,6 +24,7 @@ type Request struct {
 	Harnesses      []detectharness.ID           `json:"harnesses,omitempty"`
 	Desired        detectharness.DesiredState   `json:"desired,omitempty"`
 	ConflictPolicy detectharness.ConflictPolicy `json:"conflictPolicy,omitempty"`
+	Scope          *detectharness.Scope         `json:"scope,omitempty"`
 	DryRun         bool                         `json:"dryRun,omitempty"`
 }
 

@@ -13,12 +13,16 @@ from .client import (
     HarnessId,
     InvocationError,
     OutputLimitError,
+    ProjectScope,
     ProtocolError,
     ProtocolValidationError,
     ResultState,
+    Scope,
+    ScopeMode,
     StdioServer,
     UpdateOutcome,
     UpdateResult,
+    project_scope,
 )
 
 __all__ = [
@@ -36,10 +40,14 @@ __all__ = [
     "HarnessId",
     "InvocationError",
     "OutputLimitError",
+    "ProjectScope",
     "ProtocolError",
     "ProtocolValidationError",
     "ResultState",
+    "Scope",
+    "ScopeMode",
     "StdioServer",
     "UpdateOutcome",
     "UpdateResult",
+    "project_scope",
 ]

@@ -11,6 +11,7 @@ import {
   OutputLimitError,
   ProtocolError,
   ProtocolValidationError,
+  projectScope,
 } from "../dist/index.js";
 
 const fakeBinary = fileURLToPath(new URL("./fake-binary.mjs", import.meta.url));
@@ -120,4 +121,20 @@ test("output-limit termination escalates for a resistant process group", { concu
     if (previous === undefined) delete process.env.DETECT_HARNESS_FAKE_MODE;
     else process.env.DETECT_HARNESS_FAKE_MODE = previous;
   }
+});
+
+test("project scope flows into requests and responses, and zoo-code is accepted", async () => {
+  const client = new DetectHarnessClient({ binaryPath: fakeBinary });
+  const scope = projectScope("/tmp/project");
+
+  const detection = (await client.detect(scope))[0];
+  assert.equal(detection.scope, "project");
+  assert.equal(detection.scopeDir, "/tmp/project");
+
+  const changes = await client.plan(["zoo-code"], "present", server, { scope });
+  assert.equal(changes[0].scope, "project");
+  assert.equal(changes[0].scopeDir, "/tmp/project");
+  assert.equal(changes[0].harnessId, "zoo-code");
+
+  assert.throws(() => projectScope("  "), TypeError);
 });

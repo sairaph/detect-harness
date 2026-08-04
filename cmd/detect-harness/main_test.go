@@ -51,6 +51,7 @@ func TestExecuteRejectsInvalidUpdateContract(t *testing.T) {
 		{Version: 1, Operation: protocol.Update, Server: server, Harnesses: []detectharness.ID{detectharness.Cursor}},
 		{Version: 1, Operation: protocol.Update, Server: server, Harnesses: []detectharness.ID{"unknown"}, Desired: detectharness.Present},
 		{Version: 1, Operation: protocol.Update, Server: server, Harnesses: []detectharness.ID{detectharness.Cursor, detectharness.Cursor}, Desired: detectharness.Present},
+		{Version: 1, Operation: protocol.Update, Server: server, Harnesses: []detectharness.ID{detectharness.RooCode, detectharness.ZooCode}, Desired: detectharness.Present},
 	} {
 		if _, err := execute(context.Background(), request); err == nil {
 			t.Fatalf("expected request rejection: %#v", request)

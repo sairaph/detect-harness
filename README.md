@@ -89,11 +89,13 @@ permissions, and uninstall behavior.
 | `windsurf` | Windsurf | JSON `mcpServers` |
 | `zed` | Zed | JSONC `context_servers` |
 | `cline` | Cline | JSON `mcpServers` |
-| `roo-code` | Roo Code | JSON `mcpServers` |
+| `zoo-code` | Zoo Code ^ | JSON `mcpServers` |
 | `amazon-q` | Amazon Q Developer CLI | JSON `mcpServers` |
 | `continue` | Continue | YAML `mcpServers` list |
 | `opencode` | OpenCode | JSONC `mcp` local command |
 | `vscode` | VS Code / Copilot | JSONC `servers` with stdio type |
+
+^ The deprecated `roo-code` id is accepted as an input alias and resolves to `zoo-code`.
 
 Paths are resolved per platform using the user home, XDG configuration root,
 and authoritative Windows application-data directories.
@@ -132,6 +134,45 @@ config, err := detectharness.RenderConfig(detectharness.VSCode, server)
 
 This is useful for previews, documentation, fixtures, and installers that own
 their persistence layer.
+
+### Project scope
+
+Version 0.2 adds directory-local (per-project) configuration support for the 10
+harnesses that provide it:
+
+| Harness | Project file | Shareable | Reload hint |
+|---|---|---|---|
+| Claude Code | `.mcp.json` | Yes (commit) | restart session (approval gate) |
+| Cursor | `.cursor/mcp.json` | Yes | restart Cursor |
+| Codex CLI | `.codex/config.toml` | Yes (trust gate) | restart Codex |
+| Gemini CLI | `.gemini/settings.json` | Yes (trust gate) | `/mcp reload` |
+| Zed | `.zed/settings.json` | Yes | live (watched) |
+| Zoo Code | `.roo/mcp.json` | Yes | hot-reload (watched) |
+| Amazon Q | `.amazonq/mcp.json` | Yes | restart session |
+| Continue | `.continue/mcpServers/detect-harness.yaml` | Yes | hot-reload on save |
+| OpenCode | `opencode.json` | Yes | restart OpenCode |
+| VS Code | `.vscode/mcp.json` | Yes (trust gate) | MCP: List Servers |
+
+Use `detectharness.ProjectScopeDir(dir)` to select a project scope and pass it
+through `PlanOptions` or `DetectOptions`:
+
+```go
+scope := detectharness.ProjectScopeDir("/path/to/project")
+
+// Project-scoped detection: reports which project files exist.
+detections, err := detectharness.DetectHarnesses(ctx, detectharness.DetectOptions{
+    Scope: scope,
+})
+
+// Project-scoped planning: writes to the project-local config file.
+plan := installer.Plan(ctx, selected, detectharness.Present, detectharness.PlanOptions{
+    Scope: scope,
+})
+```
+
+Harnesses without project support (`claude-desktop`, `windsurf`, `cline`) return
+`unavailable` / `skipped` — never an error that aborts a multi-harness operation.
+The zero-value `Scope` (global) preserves existing behavior exactly.
 
 ### Resolve conflicts
 
@@ -244,7 +285,7 @@ manifests, creates `v<version>`, runs the full test suite, and publishes one
 GitHub Release containing every binary and wrapper format. A manually pushed
 version tag must match the root version and point to a commit on `main`.
 
-## Scope
+## Transport support
 
 Version 1 manages local stdio MCP servers. Remote HTTP and SSE transports need
 client-specific capability handling and are intentionally not implied by the

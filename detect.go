@@ -130,10 +130,21 @@ func probeExtension(system hostSystem, environment runtimeEnvironment, prefix st
 	return combineProbes(results...)
 }
 
-// Detect probes every supported harness.
-func (i *Installer) Detect(_ context.Context) []Detection {
+// Detect probes every supported harness using global configuration.
+func (i *Installer) Detect(ctx context.Context) []Detection {
+	return i.detectAll(ctx, Scope{})
+}
+
+// detectAll probes every harness for the supplied scope. Global scope keeps the
+// original install-evidence behavior; project scope reports whether a
+// directory-local configuration file is present.
+func (i *Installer) detectAll(_ context.Context, scope Scope) []Detection {
 	results := make([]Detection, 0, len(registry))
 	for _, definition := range registry {
+		if scope.Mode == ScopeProject {
+			results = append(results, i.detectProject(definition, scope))
+			continue
+		}
 		probe := definition.detect(i.system, i.runtime)
 		resolved := definition.config(i.system, i.runtime)
 		result := Detection{
@@ -152,6 +163,29 @@ func (i *Installer) Detect(_ context.Context) []Detection {
 	return results
 }
 
+// detectProject probes one harness for directory-local configuration. Harnesses
+// without project support report unavailable; others report whether the
+// project file is present.
+func (i *Installer) detectProject(definition harnessDefinition, scope Scope) Detection {
+	result := Detection{
+		Harness:  definition.Harness,
+		Scope:    ScopeProject,
+		ScopeDir: scope.Dir,
+	}
+	resolved := definition.resolveConfig(scope, i.system, i.runtime)
+	if resolved.reason != "" {
+		result.State = Unavailable
+		result.Reason = resolved.reason
+		return result
+	}
+	result.ConfigPath = resolved.path
+	probe := probePath(i.system, resolved.path)
+	result.State = probe.state
+	result.Evidence = append([]string(nil), probe.evidence...)
+	result.Reason = probe.reason
+	return result
+}
+
 // DetectHarnesses probes all built-in harnesses without requiring an MCP
 // server definition. Zero-valued options use the current host environment.
 func DetectHarnesses(ctx context.Context, options DetectOptions) ([]Detection, error) {
@@ -159,9 +193,13 @@ func DetectHarnesses(ctx context.Context, options DetectOptions) ([]Detection, e
 	if err := WithEnvironment(options)(&configured); err != nil {
 		return nil, err
 	}
+	scope, err := options.Scope.normalize()
+	if err != nil {
+		return nil, err
+	}
 	detector := &Installer{runtime: configured.runtime, system: configured.system}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return detector.Detect(ctx), nil
+	return detector.detectAll(ctx, scope), nil
 }
