@@ -44,7 +44,7 @@ file before the tool ever runs in that directory?"
 | zoo-code | Yes | `.roo/mcp.json` | `mcpServers` | 1st workspace folder | additive; project wins per-name | Yes | **hot-reload** (file watched) |
 | amazon-q | Yes | `.amazonq/mcp.json` | `mcpServers` | cwd only | additive per-server; workspace wins | Yes (`q mcp add` even auto-creates empty) | restart session |
 | continue | Yes | `.continue/mcpServers/*.{yaml,json}` (a **directory of block files**) | `mcpServers` (YAML **list**) | workspace dirs | concat + dedupe by name | Yes | save → hot-reload |
-| opencode | Yes | `opencode.json` / `opencode.jsonc` | `mcp` (object) | **cwd → git-root walk** | deep per-key; project wins | Yes | restart OpenCode |
+| opencode | Yes | `opencode.jsonc` (existing `opencode.json` honored when alone) | `mcp` (object) | **git-root → cwd walk**, then `.opencode/` dirs | deep per-key; later layer wins | Yes | restart OpenCode |
 | vscode | Yes | `.vscode/mcp.json` | `servers` (+`inputs`) | cwd | additive union | Yes (trust gate) | code-lens / `MCP: List Servers` restart |
 
 **10 of 13** harnesses support project-scoped config. `claude-desktop`,
@@ -96,10 +96,20 @@ convention), but it is flagged in the catalog.
   `{mcpServers:{...}}` map; concatenated and deduped by name. (A project
   `.continue/config.yaml` is **not** a supported merge source — `config.yaml`
   is global only.) Hot-reloaded on save. Secrets via `${{ secrets.NAME }}`.
-- **opencode**: project `opencode.json`/`.jsonc` merged **deep per-key** with
-  global (`~/.config/opencode/opencode.json`); project wins. OpenCode walks
-  cwd → nearest git root and merges all configs found. Local-command shape uses
-  `command` as an **array** and `environment` (not `env`). Reload = restart.
+- **opencode**: project `opencode.json` then `opencode.jsonc` per directory,
+  merged **deep per-key** on top of the global layers; a later layer wins.
+  Global lives in `<xdg config>/opencode` on **every platform** (xdg-basedir,
+  so `%USERPROFILE%\.config\opencode` on Windows, never `%APPDATA%`) and is
+  itself three files merged in order: legacy `config.json`, `opencode.json`,
+  `opencode.jsonc`. On first run without any of them OpenCode seeds
+  `opencode.jsonc`, so that is the file we create and prefer. Full order,
+  lowest first: global files → `$OPENCODE_CONFIG` → project files walked from
+  the git root to cwd → every `.opencode/` directory on that walk → `~/.opencode/`
+  → `$OPENCODE_CONFIG_DIR` → `$OPENCODE_CONFIG_CONTENT`.
+  `OPENCODE_DISABLE_PROJECT_CONFIG=1` skips project files. Local-command shape
+  uses `command` as an **array** and `environment` (not `env`). Reload = restart.
+  Verified against `anomalyco/opencode` (`packages/core/src/global.ts`,
+  `packages/opencode/src/config/{config,paths}.ts`).
 - **vscode**: `.vscode/mcp.json` with top-level `servers` (+ optional `inputs`
   for `${input:id}` secrets). First server start shows a **trust** dialog
   (reset via `MCP: Reset Trust`). Reload via code-lenses in `mcp.json` or
@@ -220,6 +230,16 @@ An older companion binary ignores the `scope` field and returns global results.
      `roo-code` ID is retained as a **deprecated alias** resolving to the same
      definition, so current callers keep working (non-breaking). `Supported()`
    lists "Zoo Code"; `roo-code` is documented as a legacy alias.
+4. **OpenCode layers — inspect, never write.** The managed file is
+   `opencode.jsonc` (or a lone existing `opencode.json`). The other layers
+   OpenCode merges in the same scope (legacy `config.json`, the sibling
+   `opencode.json`, `.opencode/` directories, `$OPENCODE_CONFIG`,
+   `$OPENCODE_CONFIG_DIR`, `$OPENCODE_CONFIG_CONTENT`) are read-only conflict
+   sources: a same-name entry there is a conflict under `ConflictError` and a
+   `Reason` warning under `ConflictReplace`. Global layers are deliberately not
+   conflict sources for project scope, because differing per-project settings
+   are the purpose of project scope. Existing layer files appear as detection
+   evidence.
 
 ## Sources
 

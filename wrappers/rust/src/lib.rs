@@ -851,11 +851,23 @@ fn kill_process_group(pid: u32, _sig: i32) {
     let _ = pid;
 }
 
+/// Terminates the companion. On Unix the whole process group receives
+/// `SIGTERM`, then `SIGKILL` once the grace period elapses without the direct
+/// child exiting. The grace period is polled so a cooperative companion does
+/// not delay the caller for the full window.
 fn kill_child_or_group(child: &mut std::process::Child) {
     #[cfg(unix)]
     {
         kill_process_group(child.id(), SIGTERM);
-        thread::sleep(TERMINATION_GRACE);
+        let started = Instant::now();
+        while started.elapsed() < TERMINATION_GRACE {
+            if matches!(child.try_wait(), Ok(Some(_))) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        // Escalate unconditionally: descendants in the group may still be
+        // running even when the direct child has exited.
         kill_process_group(child.id(), SIGKILL);
     }
     #[cfg(not(unix))]

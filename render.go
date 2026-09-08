@@ -110,54 +110,13 @@ func renderChange(definition harnessDefinition, scope Scope, raw []byte, server 
 }
 
 func renderJSONChange(definition harnessDefinition, raw []byte, server StdioServer, desired DesiredState, allowReplace bool) (ownership, []byte, string, error) {
-	source := bytes.TrimPrefix(raw, []byte{0xEF, 0xBB, 0xBF})
-	if len(bytes.TrimSpace(source)) == 0 {
-		source = []byte("{}")
-	}
-	var humanJSON *hujson.Value
-	humanSource := make([]byte, len(source))
-	copy(humanSource, source)
-	parsedSyntax, err := hujson.Parse(humanSource)
+	root, humanJSON, err := parseJSONDocument(raw, definition.format)
 	if err != nil {
-		return "", nil, "", fmt.Errorf("invalid %s configuration: %w", definition.format, err)
-	}
-	if definition.format == formatJSON && !parsedSyntax.IsStandard() {
-		return "", nil, "", errors.New("JSON configuration contains comments or trailing commas")
-	}
-	if err := rejectDuplicateJSONMembers(&parsedSyntax); err != nil {
 		return "", nil, "", err
 	}
-	if definition.format == formatJSONC {
-		// hujson nodes alias their input. The dedicated humanSource copy keeps
-		// planning from mutating the compare-and-swap snapshot.
-		semanticSource := make([]byte, len(source))
-		copy(semanticSource, source)
-		standard, err := jsoncToJSON(semanticSource)
-		if err != nil {
-			return "", nil, "", fmt.Errorf("standardize JSONC configuration: %w", err)
-		}
-		humanJSON = &parsedSyntax
-		source = standard
-	}
-	var root map[string]any
-	decoder := json.NewDecoder(bytes.NewReader(source))
-	decoder.UseNumber()
-	if err := decoder.Decode(&root); err != nil {
-		return "", nil, "", fmt.Errorf("invalid %s configuration: %w", definition.format, err)
-	}
-	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		return "", nil, "", errors.New("configuration must contain exactly one JSON value")
-	}
-	if root == nil {
-		return "", nil, "", errors.New("configuration root must be an object")
-	}
-	servers := map[string]any{}
-	if existing, found := root[definition.topKey]; found {
-		var ok bool
-		servers, ok = existing.(map[string]any)
-		if !ok {
-			return "", nil, "", fmt.Errorf("%s must be an object", definition.topKey)
-		}
+	servers, err := jsonServers(root, definition.topKey)
+	if err != nil {
+		return "", nil, "", err
 	}
 	expected := serverEntry(definition.entry, server)
 	current, found := servers[server.Name]
@@ -192,7 +151,6 @@ func renderJSONChange(definition harnessDefinition, raw []byte, server StdioServ
 		if err := mutateHumanJSON(humanJSON, definition.topKey, server.Name, expected, desired); err != nil {
 			return "", nil, "", err
 		}
-		humanJSON.Format()
 		return state, humanJSON.Pack(), actionFor(state, desired), nil
 	}
 	output, err := json.MarshalIndent(root, "", "  ")
@@ -200,6 +158,84 @@ func renderJSONChange(definition harnessDefinition, raw []byte, server StdioServ
 		return "", nil, "", err
 	}
 	return state, append(output, '\n'), actionFor(state, desired), nil
+}
+
+// parseJSONDocument decodes a JSON or JSONC configuration into a generic root
+// object. For a JSONC source that already has content it also returns the
+// parsed syntax tree so edits can preserve comments and formatting. An empty
+// source is treated as an empty object and returns no syntax tree, so fresh
+// files are rendered as conventionally indented standard JSON.
+func parseJSONDocument(raw []byte, format configFormat) (map[string]any, *hujson.Value, error) {
+	source := bytes.TrimPrefix(raw, []byte{0xEF, 0xBB, 0xBF})
+	fresh := len(bytes.TrimSpace(source)) == 0
+	if fresh {
+		source = []byte("{}")
+	}
+	// hujson nodes alias their input. Dedicated copies keep planning from
+	// mutating the compare-and-swap snapshot.
+	humanSource := make([]byte, len(source))
+	copy(humanSource, source)
+	parsedSyntax, err := hujson.Parse(humanSource)
+	if err != nil {
+		return nil, nil, fmt.Errorf("invalid %s configuration: %w", format, err)
+	}
+	if format == formatJSON && !parsedSyntax.IsStandard() {
+		return nil, nil, errors.New("JSON configuration contains comments or trailing commas")
+	}
+	if err := rejectDuplicateJSONMembers(&parsedSyntax); err != nil {
+		return nil, nil, err
+	}
+	var humanJSON *hujson.Value
+	if format == formatJSONC {
+		semanticSource := make([]byte, len(source))
+		copy(semanticSource, source)
+		standard, err := jsoncToJSON(semanticSource)
+		if err != nil {
+			return nil, nil, fmt.Errorf("standardize JSONC configuration: %w", err)
+		}
+		source = standard
+		if !fresh {
+			humanJSON = &parsedSyntax
+		}
+	}
+	var root map[string]any
+	decoder := json.NewDecoder(bytes.NewReader(source))
+	decoder.UseNumber()
+	if err := decoder.Decode(&root); err != nil {
+		return nil, nil, fmt.Errorf("invalid %s configuration: %w", format, err)
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return nil, nil, errors.New("configuration must contain exactly one JSON value")
+	}
+	if root == nil {
+		return nil, nil, errors.New("configuration root must be an object")
+	}
+	return root, humanJSON, nil
+}
+
+// jsonServers returns the server container under topKey, or an empty map when
+// the key is absent. A present key that is not an object is an error.
+func jsonServers(root map[string]any, topKey string) (map[string]any, error) {
+	existing, found := root[topKey]
+	if !found {
+		return map[string]any{}, nil
+	}
+	servers, ok := existing.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("%s must be an object", topKey)
+	}
+	return servers, nil
+}
+
+// layerServers parses an additional configuration layer and returns the
+// server entries it declares under topKey. Layers are inspected, never
+// written, so the syntax tree is discarded.
+func layerServers(raw []byte, format configFormat, topKey string) (map[string]any, error) {
+	root, _, err := parseJSONDocument(raw, format)
+	if err != nil {
+		return nil, err
+	}
+	return jsonServers(root, topKey)
 }
 
 func rejectDuplicateJSONMembers(value *hujson.Value) error {
@@ -315,21 +351,24 @@ func jsoncToJSON(source []byte) ([]byte, error) {
 	return output, nil
 }
 
+// mutateHumanJSON edits a parsed JSONC document in place. Only the affected
+// member is touched: the rest of the document, including comments, blank
+// lines, indentation style, line endings, and trailing-comma style, is packed
+// back byte for byte. The document is never reformatted as a whole.
 func mutateHumanJSON(document *hujson.Value, topKey, name string, expected map[string]any, desired DesiredState) error {
 	root, ok := document.Value.(*hujson.Object)
 	if !ok {
 		return errors.New("JSONC configuration root must be an object")
 	}
+	layout := detectHumanLayout(document, root)
+	rootIndent := memberIndent(root, layout.unit)
 	topIndex := humanJSONMember(root, topKey)
 	if desired == Present && topIndex < 0 {
-		value, err := humanJSONValue(map[string]any{name: expected})
+		value, err := humanJSONValue(map[string]any{name: expected}, rootIndent, layout)
 		if err != nil {
 			return err
 		}
-		root.Members = append(root.Members, hujson.ObjectMember{
-			Name:  hujson.Value{Value: hujson.String(topKey)},
-			Value: value,
-		})
+		appendHumanMember(root, topKey, value, rootIndent, "", layout)
 		return nil
 	}
 	if topIndex < 0 {
@@ -339,17 +378,15 @@ func mutateHumanJSON(document *hujson.Value, topKey, name string, expected map[s
 	if !ok {
 		return fmt.Errorf("%s must be an object", topKey)
 	}
+	serversIndent := memberIndent(servers, rootIndent+layout.unit)
 	serverIndex := humanJSONMember(servers, name)
 	if desired == Present {
-		value, err := humanJSONValue(expected)
+		value, err := humanJSONValue(expected, serversIndent, layout)
 		if err != nil {
 			return err
 		}
 		if serverIndex < 0 {
-			servers.Members = append(servers.Members, hujson.ObjectMember{
-				Name:  hujson.Value{Value: hujson.String(name)},
-				Value: value,
-			})
+			appendHumanMember(servers, name, value, serversIndent, rootIndent, layout)
 		} else {
 			servers.Members[serverIndex].Value.Value = value.Value
 		}
@@ -358,11 +395,100 @@ func mutateHumanJSON(document *hujson.Value, topKey, name string, expected map[s
 	if serverIndex < 0 {
 		return nil
 	}
-	servers.Members = append(servers.Members[:serverIndex], servers.Members[serverIndex+1:]...)
+	removeHumanMember(servers, serverIndex)
 	if len(servers.Members) == 0 {
-		root.Members = append(root.Members[:topIndex], root.Members[topIndex+1:]...)
+		removeHumanMember(root, topIndex)
 	}
 	return nil
+}
+
+// humanLayout captures the whitespace conventions of an existing document.
+type humanLayout struct {
+	eol  string
+	unit string
+}
+
+var crlf = []byte("\r\n")
+
+// detectHumanLayout infers line endings from any whitespace in the document
+// and the indentation unit from the root object's members. Two spaces are the
+// fallback for documents that carry no usable whitespace.
+func detectHumanLayout(document *hujson.Value, root *hujson.Object) humanLayout {
+	layout := humanLayout{eol: "\n", unit: "  "}
+	if bytes.Contains(root.AfterExtra, crlf) {
+		layout.eol = "\r\n"
+	}
+	document.Range(func(value *hujson.Value) bool {
+		if bytes.Contains(value.BeforeExtra, crlf) || bytes.Contains(value.AfterExtra, crlf) {
+			layout.eol = "\r\n"
+			return false
+		}
+		return true
+	})
+	if indent, found := existingMemberIndent(root); found && indent != "" {
+		layout.unit = indent
+	}
+	return layout
+}
+
+// existingMemberIndent returns the indentation preceding the first member of
+// object on its own line, when the object has such a member.
+func existingMemberIndent(object *hujson.Object) (string, bool) {
+	for _, member := range object.Members {
+		extra := member.Name.BeforeExtra
+		newline := bytes.LastIndexByte(extra, '\n')
+		if newline < 0 {
+			continue
+		}
+		indent := extra[newline+1:]
+		if len(bytes.TrimLeft(indent, " \t")) != 0 {
+			continue
+		}
+		return string(indent), true
+	}
+	return "", false
+}
+
+// memberIndent returns the indentation for members of object, using the
+// existing members when present and fallback otherwise.
+func memberIndent(object *hujson.Object, fallback string) string {
+	if indent, found := existingMemberIndent(object); found {
+		return indent
+	}
+	return fallback
+}
+
+// appendHumanMember appends name: value to object on a new line indented like
+// its siblings. The trailing-comma style of the object is preserved, and an
+// empty object gains a closing brace on its own line at the parent's indent.
+func appendHumanMember(object *hujson.Object, name string, value hujson.Value, indent, parentIndent string, layout humanLayout) {
+	trailingComma := len(object.Members) > 0 && object.Members[len(object.Members)-1].Value.AfterExtra != nil
+	if len(object.Members) == 0 {
+		object.AfterExtra = hujson.Extra(layout.eol + parentIndent)
+	}
+	value.BeforeExtra = hujson.Extra(" ")
+	value.AfterExtra = nil
+	if trailingComma {
+		value.AfterExtra = hujson.Extra{}
+	}
+	object.Members = append(object.Members, hujson.ObjectMember{
+		Name:  hujson.Value{BeforeExtra: hujson.Extra(layout.eol + indent), Value: hujson.String(name)},
+		Value: value,
+	})
+}
+
+// removeHumanMember deletes the member at index while keeping the object's
+// trailing-comma style: when the object had no trailing comma, the new last
+// member must not end with one either.
+func removeHumanMember(object *hujson.Object, index int) {
+	trailingComma := object.Members[len(object.Members)-1].Value.AfterExtra != nil
+	object.Members = append(object.Members[:index], object.Members[index+1:]...)
+	if trailingComma || len(object.Members) == 0 {
+		return
+	}
+	last := &object.Members[len(object.Members)-1].Value
+	object.AfterExtra = append(append(hujson.Extra(nil), last.AfterExtra...), object.AfterExtra...)
+	last.AfterExtra = nil
 }
 
 func humanJSONMember(object *hujson.Object, name string) int {
@@ -375,10 +501,15 @@ func humanJSONMember(object *hujson.Object, name string) int {
 	return -1
 }
 
-func humanJSONValue(value any) (hujson.Value, error) {
-	raw, err := json.Marshal(value)
+// humanJSONValue renders value as an indented JSONC subtree whose continuation
+// lines start at indent, matching the surrounding document.
+func humanJSONValue(value any, indent string, layout humanLayout) (hujson.Value, error) {
+	raw, err := json.MarshalIndent(value, indent, layout.unit)
 	if err != nil {
 		return hujson.Value{}, err
+	}
+	if layout.eol != "\n" {
+		raw = bytes.ReplaceAll(raw, []byte("\n"), []byte(layout.eol))
 	}
 	parsed, err := hujson.Parse(raw)
 	if err != nil {

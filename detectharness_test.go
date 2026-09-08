@@ -609,26 +609,6 @@ func TestCanonicalIDExported(t *testing.T) {
 	}
 }
 
-func TestOpenCodeConfigRejectsAmbiguousFiles(t *testing.T) {
-	installer, home := testInstaller(t)
-	opencodeDir := filepath.Join(home, ".config", "opencode")
-	if err := os.MkdirAll(opencodeDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(opencodeDir, "opencode.jsonc"), []byte("{}"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(opencodeDir, "opencode.json"), []byte("{}"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	detections := installer.Detect(context.Background())
-	for _, d := range detections {
-		if d.ID == OpenCode && d.ConfigError == "" {
-			t.Fatalf("expected OpenCode config error when both files exist, got detection: %#v", d)
-		}
-	}
-}
-
 func TestRenderConfigScopedWithProjectScope(t *testing.T) {
 	server := testServer()
 	config, err := RenderConfigScoped(ClaudeCode, server, ProjectScopeDir("/tmp"))

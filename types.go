@@ -111,7 +111,7 @@ type Scope struct {
 	Dir string `json:"dir,omitempty"`
 }
 
-// ProjectScope returns a scope that targets directory-local configuration in dir.
+// ProjectScopeDir returns a scope that targets directory-local configuration in dir.
 func ProjectScopeDir(dir string) Scope { return Scope{Mode: ScopeProject, Dir: dir} }
 
 // normalize validates the scope and resolves the project directory to an

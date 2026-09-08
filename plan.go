@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"strings"
 )
 
 const maximumConfigSize = 8 << 20
@@ -52,6 +53,15 @@ func readSnapshot(system hostSystem, path string) (fileSnapshot, error) {
 }
 
 // Plan inspects selected harnesses and computes changes without writing files.
+// It never returns nil: invalid input produces one unavailable change per
+// selected harness whose Reason explains the rejection, so callers can render
+// every outcome uniformly.
+//
+// Harnesses that merge additional configuration layers (for example OpenCode's
+// legacy config.json or $OPENCODE_CONFIG) are inspected for same-name entries
+// that would shadow or outlive the managed entry. Under ConflictError such an
+// entry is reported as a conflict; under ConflictReplace the change proceeds
+// and Reason carries a warning naming the other layer.
 func (i *Installer) Plan(ctx context.Context, ids []ID, desired DesiredState, options PlanOptions) *Plan {
 	if desired != Present && desired != Absent {
 		return invalidSelectionPlan(ids, desired, "desired state must be present or absent", options.Scope.Mode, options.Scope.Dir)
@@ -120,19 +130,91 @@ func (i *Installer) Plan(ctx context.Context, ids []ID, desired DesiredState, op
 			plan.changes = append(plan.changes, change)
 			continue
 		}
+		notes, err := i.inspectLayers(definition, scope, resolved.path, desired)
+		if err != nil {
+			change.State = ChangeUnavailable
+			change.Reason = err.Error()
+			plan.changes = append(plan.changes, change)
+			continue
+		}
+		warning := strings.Join(notes, "; ")
+		if warning != "" && policy == ConflictError {
+			change.State = ChangeConflict
+			change.Reason = warning
+			plan.changes = append(plan.changes, change)
+			continue
+		}
 		if action == "" {
 			change.State = ChangeNoop
+			change.Reason = noopReason(desired)
+			if warning != "" {
+				change.Reason += "; " + warning
+			}
 			plan.changes = append(plan.changes, change)
 			continue
 		}
 		change.State = ChangeReady
 		change.Action = action
+		change.Reason = warning
 		change.Before = string(snapshot.raw)
 		change.After = string(after)
 		change.after = after
 		plan.changes = append(plan.changes, change)
 	}
 	return plan
+}
+
+func noopReason(desired DesiredState) string {
+	if desired == Absent {
+		return "not registered"
+	}
+	return "already registered"
+}
+
+// inspectLayers checks every additional configuration layer of the harness for
+// an entry with the managed server's name. It returns one human-readable note
+// per entry that matters: any same-name entry when removing (the server would
+// stay registered there), and a differing entry when adding (deep merging
+// would combine or override the managed entry). Layers that cannot be
+// inspected are errors so an unreadable layer never passes silently.
+func (i *Installer) inspectLayers(definition harnessDefinition, scope Scope, target string, desired DesiredState) ([]string, error) {
+	expected := serverEntry(definition.entry, i.server)
+	var notes []string
+	for _, layer := range definition.resolveLayers(scope, target, i.system, i.runtime) {
+		raw := layer.raw
+		if layer.path != "" {
+			if layer.path == target {
+				continue
+			}
+			snapshot, err := readSnapshot(i.system, layer.path)
+			if err != nil {
+				return nil, fmt.Errorf("inspect %s: %w", layer.name, err)
+			}
+			if !snapshot.exists {
+				continue
+			}
+			raw = snapshot.raw
+		}
+		servers, err := layerServers(raw, definition.format, definition.topKey)
+		if err != nil {
+			return nil, fmt.Errorf("inspect %s: %w", layer.name, err)
+		}
+		current, found := servers[i.server.Name]
+		if !found {
+			continue
+		}
+		switch {
+		case desired == Absent:
+			notes = append(notes, fmt.Sprintf("%s also defines %q, so the server stays registered there after removal", layer.name, i.server.Name))
+		case semanticEqual(current, expected):
+			continue
+		case layer.overrides:
+			notes = append(notes, fmt.Sprintf("%s defines a different %q entry and overrides this file", layer.name, i.server.Name))
+		default:
+			notes = append(notes, fmt.Sprintf("%s defines a different %q entry that is deep-merged beneath this file", layer.name, i.server.Name))
+		}
+	}
+	return notes, nil
 }
 
 func invalidSelectionPlan(ids []ID, desired DesiredState, reason string, scope ScopeMode, scopeDir string) *Plan {
@@ -156,16 +238,14 @@ func (i *Installer) Apply(ctx context.Context, plan *Plan) []Result {
 	}
 	results := make([]Result, 0, len(plan.changes))
 	for _, change := range plan.changes {
-		result := Result{HarnessID: change.HarnessID, Name: change.Name, Path: change.Path, Desired: change.Desired, Action: change.Action, Scope: change.Scope, ScopeDir: change.ScopeDir}
+		result := Result{HarnessID: change.HarnessID, Name: change.Name, Path: change.Path, Desired: change.Desired, Action: change.Action, Reason: change.Reason, Scope: change.Scope, ScopeDir: change.ScopeDir}
 		switch change.State {
 		case ChangeNoop:
 			result.State = ApplyNoop
 		case ChangeConflict:
 			result.State = ApplyConflict
-			result.Reason = change.Reason
 		case ChangeUnavailable:
 			result.State = ApplySkipped
-			result.Reason = change.Reason
 		case ChangeReady:
 			if err := ctx.Err(); err != nil {
 				result.State = ApplyFailed

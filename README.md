@@ -73,7 +73,7 @@ permissions, and uninstall behavior.
 - **Safe by default** - same-name foreign entries are conflicts unless the
   caller explicitly opts into replacement.
 - **Format aware** - JSON, JSONC, TOML, and YAML receive their required native
-  shapes while unrelated settings and comments are retained.
+  shapes while unrelated settings, comments, and formatting are retained.
 - **Cross-language** - use the Go package directly or invoke the versioned JSON
   companion through typed Node, Python, and Rust wrappers.
 
@@ -124,7 +124,10 @@ results := installer.Apply(ctx, plan)
 ```
 
 Use `detectharness.Absent` to remove the registration. `Installer.Ensure` is a
-plan-and-apply convenience method for unattended flows.
+plan-and-apply convenience method for unattended flows. `Plan` never returns
+nil; invalid input yields one `unavailable` change per harness. A `noop` change
+carries a `Reason` such as `already registered` so dry-run output needs no
+special casing.
 
 ### Render without writing
 
@@ -150,8 +153,11 @@ harnesses that provide it:
 | Zoo Code | `.roo/mcp.json` | Yes | hot-reload (watched) |
 | Amazon Q | `.amazonq/mcp.json` | Yes | restart session |
 | Continue | `.continue/mcpServers/detect-harness.yaml` | Yes | hot-reload on save |
-| OpenCode | `opencode.json` | Yes | restart OpenCode |
+| OpenCode | `opencode.jsonc` ^ | Yes | restart OpenCode |
 | VS Code | `.vscode/mcp.json` | Yes (trust gate) | MCP: List Servers |
+
+^ An existing `opencode.json` is used when it is the only file; `opencode.jsonc`
+wins when both exist, matching OpenCode's own merge order.
 
 Use `detectharness.ProjectScopeDir(dir)` to select a project scope and pass it
 through `PlanOptions` or `DetectOptions`:
@@ -163,6 +169,9 @@ scope := detectharness.ProjectScopeDir("/path/to/project")
 detections, err := detectharness.DetectHarnesses(ctx, detectharness.DetectOptions{
     Scope: scope,
 })
+
+// The same from an existing installer, reusing its environment options.
+detections, err = installer.DetectScoped(ctx, scope)
 
 // Project-scoped planning: writes to the project-local config file.
 plan := installer.Plan(ctx, selected, detectharness.Present, detectharness.PlanOptions{
@@ -187,6 +196,14 @@ options := detectharness.PlanOptions{
 
 Use `ConflictReplace` only when your installer owns the stable server name and
 intentionally wants to migrate its executable path or environment.
+
+OpenCode merges several configuration layers (legacy `config.json`, a sibling
+`opencode.json`, `.opencode/` directories, `$OPENCODE_CONFIG`,
+`$OPENCODE_CONFIG_DIR`, and `$OPENCODE_CONFIG_CONTENT`). `Plan` inspects them
+for a same-name entry that would shadow or outlive the managed one: under
+`ConflictError` it is reported as a conflict naming the layer; under
+`ConflictReplace` the change proceeds and the warning is carried in `Reason`.
+Only the managed file is ever written.
 
 ## Companion protocol
 
@@ -240,8 +257,10 @@ binaries for macOS, Linux, and Windows on AMD64 and ARM64.
 
 - Invalid roots, wrong container types, duplicate JSON keys, oversized configs,
   and multi-document YAML are rejected without writes.
-- JSONC comments, TOML source outside managed tables, YAML nodes, and unrelated
-  settings are retained.
+- JSONC edits touch only the affected member: comments, blank lines,
+  indentation style, line endings, and trailing-comma style elsewhere in the
+  file are packed back byte for byte. TOML source outside managed tables, YAML
+  nodes, and unrelated settings are retained.
 - Plans retain snapshots and recheck immediately before atomic publication.
 - New same-directory temporary files use restrictive permissions; existing
   config permissions are retained, and staged content is flushed before replacement.
@@ -256,6 +275,11 @@ binaries for macOS, Linux, and Windows on AMD64 and ARM64.
 - Deprecated harness IDs (e.g. `"roo-code"`) are accepted as input and resolved
   to their canonical replacement via `CanonicalID`. This ensures protocol-level
   callers deduplicate IDs consistently with the registry.
+- Additional configuration layers a harness merges (currently OpenCode) are
+  inspected read-only; an unreadable layer makes the change `unavailable`
+  rather than being ignored.
+- Fresh JSONC files are written as two-space indented standard JSON; an
+  existing file's own indentation is followed for inserted members.
 
 ## Build and test
 

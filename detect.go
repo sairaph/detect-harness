@@ -135,6 +135,21 @@ func (i *Installer) Detect(ctx context.Context) []Detection {
 	return i.detectAll(ctx, Scope{})
 }
 
+// DetectScoped probes every supported harness in the requested scope using the
+// installer's own environment. The zero-value scope behaves like Detect; a
+// project scope reports whether each harness's directory-local configuration
+// is present. An invalid scope is an error.
+func (i *Installer) DetectScoped(ctx context.Context, scope Scope) ([]Detection, error) {
+	normalized, err := scope.normalize()
+	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return i.detectAll(ctx, normalized), nil
+}
+
 // detectAll probes every harness for the supplied scope. Global scope keeps the
 // original install-evidence behavior; project scope reports whether a
 // directory-local configuration file is present.
@@ -179,7 +194,18 @@ func (i *Installer) detectProject(definition harnessDefinition, scope Scope) Det
 		return result
 	}
 	result.ConfigPath = resolved.path
-	probe := probePath(i.system, resolved.path)
+	probes := []probeResult{probePath(i.system, resolved.path)}
+	// Additional layers inside the project directory (for example OpenCode's
+	// .opencode/opencode.json) are project configuration too, so they count as
+	// evidence even when the managed file does not exist yet.
+	prefix := scope.Dir + string(filepath.Separator)
+	for _, layer := range definition.resolveLayers(scope, resolved.path, i.system, i.runtime) {
+		if layer.path == "" || layer.path == resolved.path || !strings.HasPrefix(layer.path, prefix) {
+			continue
+		}
+		probes = append(probes, probePath(i.system, layer.path))
+	}
+	probe := combineProbes(probes...)
 	result.State = probe.state
 	result.Evidence = append([]string(nil), probe.evidence...)
 	result.Reason = probe.reason

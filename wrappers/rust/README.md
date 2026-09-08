@@ -34,7 +34,7 @@ let outcome = client.update(
 `DETECT_HARNESS_BIN`, then asks the operating system to resolve
 `detect-harness` through `PATH`. The binary is executed directly with no shell
 and no arguments; exactly one JSON request is written to stdin. Stdout and
-stdout and stderr are limited to 32 MiB combined by default and can be adjusted
+stderr are limited to 32 MiB combined by default and can be adjusted
 with `Client::max_output_bytes`. The default conflict policy is `error`; use
 `plan_with_conflict_policy` or `update_with_conflict_policy` to select
 `ConflictPolicy::Replace`.

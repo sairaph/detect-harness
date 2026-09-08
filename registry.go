@@ -1,6 +1,9 @@
 package detectharness
 
-import "path/filepath"
+import (
+	"path/filepath"
+	"strings"
+)
 
 type configFormat string
 
@@ -29,11 +32,31 @@ type harnessDefinition struct {
 	// project resolves a directory-local configuration path. A nil project
 	// means the harness only supports a global configuration.
 	project *projectDefinition
+	// layers lists the other configuration sources the harness merges with the
+	// managed file in the same scope. Plan inspects them for same-name entries
+	// that would shadow or outlive the managed entry. A nil layers means the
+	// managed file is the only source for its scope.
+	layers func(scope Scope, target string, system hostSystem, environment runtimeEnvironment) []configLayer
 }
 
 // projectDefinition holds the resolver for project-scoped configuration.
 type projectDefinition struct {
-	resolve func(dir string, system hostSystem) pathResolution
+	resolve func(dir string, system hostSystem, environment runtimeEnvironment) pathResolution
+}
+
+// configLayer is one additional configuration source a harness merges with the
+// managed file. Either path (a file) or raw (inline content) is set.
+type configLayer struct {
+	// name identifies the layer in messages: a file path or an environment
+	// variable name.
+	name string
+	// path is the file to inspect. It is empty for inline layers.
+	path string
+	// raw is inline content for layers that are not files.
+	raw []byte
+	// overrides reports whether the layer is merged after the managed file and
+	// therefore wins on conflicting fields.
+	overrides bool
 }
 
 func available(path string) pathResolution { return pathResolution{path: path} }
@@ -45,14 +68,23 @@ func (d harnessDefinition) resolveConfig(scope Scope, system hostSystem, environ
 		if d.project == nil {
 			return pathResolution{reason: d.Name + " has no project-scope configuration"}
 		}
-		return d.project.resolve(scope.Dir, system)
+		return d.project.resolve(scope.Dir, system, environment)
 	}
 	return d.config(system, environment)
 }
 
+// resolveLayers lists the additional configuration sources for the scope, or
+// nil when the harness has none.
+func (d harnessDefinition) resolveLayers(scope Scope, target string, system hostSystem, environment runtimeEnvironment) []configLayer {
+	if d.layers == nil {
+		return nil
+	}
+	return d.layers(scope, target, system, environment)
+}
+
 // projectFile returns a resolver that joins the project directory with rel.
-func projectFile(rel string) func(dir string, system hostSystem) pathResolution {
-	return func(dir string, _ hostSystem) pathResolution {
+func projectFile(rel string) func(dir string, system hostSystem, environment runtimeEnvironment) pathResolution {
+	return func(dir string, _ hostSystem, _ runtimeEnvironment) pathResolution {
 		return available(filepath.Join(dir, rel))
 	}
 }
@@ -113,11 +145,55 @@ func clineConfig(_ hostSystem, environment runtimeEnvironment) pathResolution {
 	}
 }
 
+// OpenCode configuration layout, verified against anomalyco/opencode
+// (packages/core/src/global.ts, packages/opencode/src/config/{config,paths}.ts).
+//
+// The global directory is <xdg config>/opencode on every platform, including
+// Windows, because OpenCode resolves it with the xdg-basedir convention rather
+// than %APPDATA%. Within one directory OpenCode deep-merges, in order,
+// config.json (legacy), opencode.json, and opencode.jsonc, so a later file
+// wins on conflicting fields. On first run without any of them OpenCode seeds
+// opencode.jsonc, which is therefore the file this library creates and
+// prefers.
+//
+// The full merge order, lowest precedence first, is: global files,
+// $OPENCODE_CONFIG, project files walked from the git root to the working
+// directory (opencode.json then opencode.jsonc per directory), every
+// .opencode/ directory on the same walk, ~/.opencode/, $OPENCODE_CONFIG_DIR,
+// and finally $OPENCODE_CONFIG_CONTENT.
+const (
+	openCodeLegacyFile   = "config.json"
+	openCodeStandardFile = "opencode.json"
+	openCodeHumanFile    = "opencode.jsonc"
+	openCodeLocalDir     = ".opencode"
+)
+
 func openCodeDirectory(environment runtimeEnvironment) pathResolution {
-	if environment.platform == "windows" {
-		return joinResolution(environment.appData(), "opencode")
-	}
 	return joinResolution(environment.xdgConfig(), "opencode")
+}
+
+// openCodeConfigIn resolves the managed OpenCode file inside dir. An existing
+// opencode.jsonc always wins because OpenCode merges it last; opencode.json is
+// used only when it is the sole file present; a fresh directory receives
+// opencode.jsonc to match OpenCode's own default.
+func openCodeConfigIn(dir string, system hostSystem) pathResolution {
+	human := filepath.Join(dir, openCodeHumanFile)
+	standard := filepath.Join(dir, openCodeStandardFile)
+	humanState := probePath(system, human)
+	if humanState.state == Detected {
+		return available(human)
+	}
+	if humanState.state == Unavailable {
+		return pathResolution{reason: humanState.reason}
+	}
+	standardState := probePath(system, standard)
+	if standardState.state == Detected {
+		return available(standard)
+	}
+	if standardState.state == Unavailable {
+		return pathResolution{reason: standardState.reason}
+	}
+	return available(human)
 }
 
 func openCodeConfig(system hostSystem, environment runtimeEnvironment) pathResolution {
@@ -125,52 +201,69 @@ func openCodeConfig(system hostSystem, environment runtimeEnvironment) pathResol
 	if directory.reason != "" {
 		return directory
 	}
-	jsonc := filepath.Join(directory.path, "opencode.jsonc")
-	json := filepath.Join(directory.path, "opencode.json")
-	jsoncState := probePath(system, jsonc)
-	jsonState := probePath(system, json)
-	if jsoncState.state == Detected && jsonState.state == Detected {
-		return pathResolution{reason: "both opencode.jsonc and opencode.json exist; the authoritative config is ambiguous"}
-	}
-	if jsoncState.state == Detected {
-		return available(jsonc)
-	}
-	if jsonState.state == Detected {
-		return available(json)
-	}
-	if jsoncState.state == Unavailable && jsonState.state != NotDetected {
-		return pathResolution{reason: jsoncState.reason}
-	}
-	if jsonState.state == Unavailable {
-		return pathResolution{reason: jsonState.reason}
-	}
-	return available(json)
+	return openCodeConfigIn(directory.path, system)
 }
 
-// openCodeProjectConfig resolves the project-scoped opencode config inside dir,
-// preferring an existing opencode.jsonc, then opencode.json, then defaulting
-// to opencode.json for a fresh file.
-func openCodeProjectConfig(dir string, system hostSystem) pathResolution {
-	jsonc := filepath.Join(dir, "opencode.jsonc")
-	standard := filepath.Join(dir, "opencode.json")
-	jsoncState := probePath(system, jsonc)
-	standardState := probePath(system, standard)
-	if jsoncState.state == Detected && standardState.state == Detected {
-		return pathResolution{reason: "both opencode.jsonc and opencode.json exist in the project directory; the authoritative config is ambiguous"}
+func openCodeProjectConfig(dir string, system hostSystem, _ runtimeEnvironment) pathResolution {
+	return openCodeConfigIn(dir, system)
+}
+
+// openCodeLayers lists the other configuration sources OpenCode merges with the
+// managed file in the same scope. Global-scope layers are not reported for
+// project scope (and vice versa) because differing per-project settings are
+// the purpose of project scope, not a conflict.
+func openCodeLayers(scope Scope, target string, _ hostSystem, environment runtimeEnvironment) []configLayer {
+	var layers []configLayer
+	file := func(path string, overrides bool) {
+		layers = append(layers, configLayer{name: path, path: path, overrides: overrides})
 	}
-	if jsoncState.state == Detected {
-		return available(jsonc)
+	directoryFiles := func(dir string, overrides bool) {
+		file(filepath.Join(dir, openCodeStandardFile), overrides)
+		file(filepath.Join(dir, openCodeHumanFile), overrides)
 	}
-	if standardState.state == Detected {
-		return available(standard)
+	targetDir := filepath.Dir(target)
+	if scope.Mode == ScopeProject {
+		if filepath.Base(target) == openCodeHumanFile {
+			file(filepath.Join(targetDir, openCodeStandardFile), false)
+		}
+		directoryFiles(filepath.Join(targetDir, openCodeLocalDir), true)
+	} else {
+		file(filepath.Join(targetDir, openCodeLegacyFile), false)
+		if filepath.Base(target) == openCodeHumanFile {
+			file(filepath.Join(targetDir, openCodeStandardFile), false)
+		}
+		if custom, _ := environment.lookupEnv("OPENCODE_CONFIG"); strings.TrimSpace(custom) != "" {
+			layers = append(layers, configLayer{name: "$OPENCODE_CONFIG (" + custom + ")", path: custom, overrides: true})
+		}
 	}
-	if jsoncState.state == Unavailable && standardState.state != NotDetected {
-		return pathResolution{reason: jsoncState.reason}
+	directoryFiles(environment.home(openCodeLocalDir), true)
+	if custom, _ := environment.lookupEnv("OPENCODE_CONFIG_DIR"); strings.TrimSpace(custom) != "" {
+		for _, name := range []string{openCodeStandardFile, openCodeHumanFile} {
+			path := filepath.Join(custom, name)
+			layers = append(layers, configLayer{name: "$OPENCODE_CONFIG_DIR (" + path + ")", path: path, overrides: true})
+		}
 	}
-	if standardState.state == Unavailable {
-		return pathResolution{reason: standardState.reason}
+	if content, _ := environment.lookupEnv("OPENCODE_CONFIG_CONTENT"); strings.TrimSpace(content) != "" {
+		layers = append(layers, configLayer{name: "$OPENCODE_CONFIG_CONTENT", raw: []byte(content), overrides: true})
 	}
-	return available(standard)
+	return layers
+}
+
+// openCodeGlobalEvidence probes every file OpenCode reads from its global
+// directory so detection evidence names the files that actually exist.
+func openCodeGlobalEvidence(system hostSystem, environment runtimeEnvironment) probeResult {
+	directory := openCodeDirectory(environment)
+	if directory.reason != "" {
+		return probeResult{state: Unavailable, reason: directory.reason}
+	}
+	results := []probeResult{probePath(system, directory.path)}
+	for _, name := range []string{openCodeLegacyFile, openCodeStandardFile, openCodeHumanFile} {
+		results = append(results, probePath(system, filepath.Join(directory.path, name)))
+	}
+	if custom, _ := environment.lookupEnv("OPENCODE_CONFIG"); strings.TrimSpace(custom) != "" {
+		results = append(results, probePath(system, custom))
+	}
+	return combineProbes(results...)
 }
 
 func vscodeConfig(_ hostSystem, environment runtimeEnvironment) pathResolution {
@@ -381,17 +474,18 @@ var registry = []harnessDefinition{
 		Harness: Harness{
 			ID: OpenCode, Name: "OpenCode", ReloadHint: "restart OpenCode",
 			Project: &ProjectScope{
-				Path:       "opencode.json[c]",
+				Path:       "opencode.jsonc",
 				ReloadHint: "restart OpenCode",
-				Lifecycle:  "opencode.json (or opencode.jsonc) at the project root. Safe to pre-create; OpenCode reads and deep-merges it with global config, walking from the working directory to the git root. It never overwrites an existing file.",
+				Lifecycle:  "opencode.jsonc at the project root (an existing opencode.json is used only when it is the sole file; opencode.jsonc wins when both exist). Safe to pre-create; OpenCode reads and deep-merges it with global config, walking from the git root to the working directory, then applies any .opencode/ directory on the same walk. It never overwrites an existing file. Ignored when OPENCODE_DISABLE_PROJECT_CONFIG is set.",
 				Shareable:  true,
 			},
 		},
 		format: formatJSONC, topKey: "mcp", entry: entryOpenCode, config: openCodeConfig,
 		detect: func(s hostSystem, r runtimeEnvironment) probeResult {
-			return combineProbes(probeCommand(s, r, "opencode"), resolvedProbe(s, openCodeDirectory(r)))
+			return combineProbes(probeCommand(s, r, "opencode"), openCodeGlobalEvidence(s, r))
 		},
 		project: &projectDefinition{resolve: openCodeProjectConfig},
+		layers:  openCodeLayers,
 	},
 	{
 		Harness: Harness{
