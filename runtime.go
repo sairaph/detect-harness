@@ -109,9 +109,10 @@ func windowsAbsolute(value string) bool {
 
 // xdgConfig resolves the XDG configuration root on every platform. Tools that
 // use the xdg-basedir convention (for example OpenCode) read
-// $XDG_CONFIG_HOME, falling back to <home>/.config even on Windows.
+// $XDG_CONFIG_HOME, falling back to <home>/.config even on Windows. An empty
+// value is treated as unset, as the XDG specification requires.
 func (r runtimeEnvironment) xdgConfig() pathResolution {
-	if configured, exists := r.lookupEnv("XDG_CONFIG_HOME"); exists {
+	if configured, exists := r.lookupEnv("XDG_CONFIG_HOME"); exists && strings.TrimSpace(configured) != "" {
 		if !r.absolute(configured) {
 			return pathResolution{reason: "XDG_CONFIG_HOME must be an absolute path"}
 		}

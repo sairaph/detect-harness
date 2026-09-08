@@ -21,7 +21,9 @@ extern "C" {
 
 #[cfg(unix)]
 const SIGKILL: i32 = 9;
+#[cfg(unix)]
 const SIGTERM: i32 = 15;
+#[cfg(unix)]
 const TERMINATION_GRACE: Duration = Duration::from_millis(250);
 
 pub const PROTOCOL_VERSION: u32 = 1;
@@ -603,6 +605,7 @@ impl Client {
         }
 
         let binary = select_binary(self.binary.as_deref(), env::var_os("DETECT_HARNESS_BIN"));
+        let started = Instant::now();
         let mut attempt = 0;
         let mut child = loop {
             let mut cmd = Command::new(&binary);
@@ -670,13 +673,32 @@ impl Client {
             stdin.write_all(&encoded).and_then(|_| stdin.flush())
         });
 
-        let status = wait_for_child(&mut child, &reader_failed, self.timeout)?;
+        let status = wait_for_child(&mut child, &reader_failed, started, self.timeout)?;
+        // The companion may have exited while a descendant still holds the
+        // output pipes open; the same deadline bounds that wait, and the whole
+        // process group is terminated when it expires.
+        if let Some(timeout) = self.timeout {
+            while !(stdout_reader.is_finished() && stderr_reader.is_finished()) {
+                if started.elapsed() >= timeout {
+                    kill_child_or_group(&mut child);
+                    let _ = join_reader(stdout_reader, OutputStream::Stdout, self.max_output_bytes);
+                    let _ = join_reader(stderr_reader, OutputStream::Stderr, self.max_output_bytes);
+                    let _ = request_writer.join();
+                    return Err(Error::Timeout { timeout });
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+        }
         let stdout = join_reader(stdout_reader, OutputStream::Stdout, self.max_output_bytes)?;
         let stderr = join_reader(stderr_reader, OutputStream::Stderr, self.max_output_bytes)?;
-        request_writer
-            .join()
-            .map_err(|_| Error::RequestWriterPanicked)?
-            .map_err(Error::WriteRequest)?;
+        // A companion that answers without draining stdin closes the pipe
+        // early; that is not a failure when a response was produced.
+        match request_writer.join() {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) if error.kind() == io::ErrorKind::BrokenPipe => {}
+            Ok(Err(error)) => return Err(Error::WriteRequest(error)),
+            Err(_) => return Err(Error::RequestWriterPanicked),
+        }
 
         parse_response(status, &stdout, &stderr)
     }
@@ -880,9 +902,9 @@ fn kill_child_or_group(child: &mut std::process::Child) {
 fn wait_for_child(
     child: &mut std::process::Child,
     reader_failed: &AtomicBool,
+    started: Instant,
     timeout: Option<Duration>,
 ) -> Result<ExitStatus> {
-    let started = Instant::now();
     loop {
         if reader_failed.load(Ordering::Acquire) {
             kill_child_or_group(child);

@@ -3,10 +3,12 @@ package detectharness
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 )
 
 type probeResult struct {
@@ -75,7 +77,9 @@ func probeCommand(system hostSystem, environment runtimeEnvironment, name string
 		for _, extension := range extensions {
 			candidate := filepath.Join(directory, name+extension)
 			info, err := system.Stat(candidate)
-			if errors.Is(err, fs.ErrNotExist) || errors.Is(err, fs.ErrInvalid) {
+			if errors.Is(err, fs.ErrNotExist) || errors.Is(err, fs.ErrInvalid) || errors.Is(err, syscall.ENOTDIR) {
+				// A PATH entry that names a file rather than a directory cannot
+				// hold the command; it is not an inspection failure.
 				continue
 			}
 			if err != nil {
@@ -155,8 +159,16 @@ func (i *Installer) DetectScoped(ctx context.Context, scope Scope) ([]Detection,
 // scope reports whether a directory-local configuration file is present.
 func (i *Installer) detectAll(_ context.Context, scope Scope) []Detection {
 	results := make([]Detection, 0, len(registry))
+	var projectErr error
+	if scope.Mode == ScopeProject {
+		projectErr = projectDirError(i.system, scope.Dir)
+	}
 	for _, definition := range registry {
 		if scope.Mode == ScopeProject {
+			if projectErr != nil {
+				results = append(results, Detection{Harness: definition.Harness, State: Unavailable, Reason: projectErr.Error(), Scope: ScopeProject, ScopeDir: scope.Dir})
+				continue
+			}
 			results = append(results, i.detectProject(definition, scope))
 			continue
 		}
@@ -198,9 +210,12 @@ func (i *Installer) detectProject(definition harnessDefinition, scope Scope) Det
 	// Additional layers inside the project directory (for example OpenCode's
 	// .opencode/opencode.json) are project configuration too, so they count as
 	// evidence even when the managed file does not exist yet.
-	prefix := scope.Dir + string(filepath.Separator)
+	prefix := filepath.Clean(scope.Dir)
+	if !strings.HasSuffix(prefix, string(filepath.Separator)) {
+		prefix += string(filepath.Separator)
+	}
 	for _, layer := range definition.resolveLayers(scope, resolved.path, i.system, i.runtime) {
-		if layer.path == "" || layer.path == resolved.path || !strings.HasPrefix(layer.path, prefix) {
+		if layer.path == "" || !strings.HasPrefix(layer.path, prefix) {
 			continue
 		}
 		probes = append(probes, probePath(i.system, layer.path))
@@ -210,6 +225,23 @@ func (i *Installer) detectProject(definition harnessDefinition, scope Scope) Det
 	result.Evidence = append([]string(nil), probe.evidence...)
 	result.Reason = probe.reason
 	return result
+}
+
+// projectDirError reports why dir cannot serve as a project directory, or nil
+// when it is an existing directory. Project scope never creates the project
+// directory itself; a missing one usually means a typo.
+func projectDirError(system hostSystem, dir string) error {
+	info, err := system.Stat(dir)
+	if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
+		return fmt.Errorf("project directory does not exist: %s", dir)
+	}
+	if err != nil {
+		return fmt.Errorf("cannot inspect project directory %s: %w", dir, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("project directory is not a directory: %s", dir)
+	}
+	return nil
 }
 
 // DetectHarnesses probes all built-in harnesses without requiring an MCP

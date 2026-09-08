@@ -20,6 +20,18 @@ struct FakeBinary {
 
 impl FakeBinary {
     fn new(response: &str, exit_code: i32) -> Self {
+        let request_placeholder = "__REQUEST__";
+        let script = format!(
+            "#!/bin/sh\n[ \"$#\" -eq 0 ] || exit 97\nIFS= read -r request\nprintf '%s' \"$request\" > {request_placeholder}\nprintf '%s\\n' {}\nexit {}\n",
+            shell_quote(Path::new(response)),
+            exit_code
+        );
+        Self::with_script(&script)
+    }
+
+    /// Installs a custom shell script; `__REQUEST__` is replaced with the
+    /// quoted path of the request capture file.
+    fn with_script(script: &str) -> Self {
         let id = NEXT_FAKE.fetch_add(1, Ordering::Relaxed);
         let directory =
             std::env::temp_dir().join(format!("detect-harness-rust-{}-{id}", std::process::id()));
@@ -27,12 +39,7 @@ impl FakeBinary {
         let executable = directory.join("fake-detect-harness");
         let temporary = directory.join("fake-detect-harness.tmp");
         let request = directory.join("request.json");
-        let script = format!(
-            "#!/bin/sh\n[ \"$#\" -eq 0 ] || exit 97\nIFS= read -r request\nprintf '%s' \"$request\" > {}\nprintf '%s\\n' {}\nexit {}\n",
-            shell_quote(&request),
-            shell_quote(Path::new(response)),
-            exit_code
-        );
+        let script = script.replace("__REQUEST__", &shell_quote(&request));
         fs::write(&temporary, script).unwrap();
         let mut permissions = fs::metadata(&temporary).unwrap().permissions();
         permissions.set_mode(0o755);
@@ -156,6 +163,43 @@ fn structured_errors_and_protocol_versions_are_checked() {
             actual: 2
         }
     ));
+}
+
+#[test]
+fn timeout_bounds_descendants_holding_output_open() {
+    let fake = FakeBinary::with_script(
+        "#!/bin/sh\nprintf '%s\\n' '{\"version\":1,\"ok\":true,\"detections\":[]}'\n(sleep 30) &\nexit 0\n",
+    );
+    let started = std::time::Instant::now();
+    let error = fake
+        .client()
+        .timeout(std::time::Duration::from_millis(200))
+        .unwrap()
+        .detect()
+        .unwrap_err();
+    assert!(
+        matches!(error, Error::Timeout { .. }),
+        "unexpected error: {error}"
+    );
+    assert!(started.elapsed() < std::time::Duration::from_secs(2));
+}
+
+#[test]
+fn response_is_kept_when_companion_ignores_stdin() {
+    let fake = FakeBinary::with_script(
+        "#!/bin/sh\nprintf '%s\\n' '{\"version\":1,\"ok\":true,\"detections\":[]}'\nexit 0\n",
+    );
+    let mut server = server();
+    server.env.insert("LARGE".into(), "x".repeat(900 * 1024));
+    let detections = fake.client().detect().unwrap();
+    assert!(detections.is_empty());
+    let config = fake.client().render(HarnessId::Codex, &server).unwrap_err();
+    // render on this fake returns detections instead of config: the point is
+    // that the large unread request did not surface as a broken pipe.
+    assert!(
+        matches!(config, Error::InvalidResponse(_)),
+        "unexpected error: {config}"
+    );
 }
 
 #[test]

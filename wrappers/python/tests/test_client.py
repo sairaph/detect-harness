@@ -98,6 +98,20 @@ class ClientTests(unittest.TestCase):
                 Client(binary_path=FAKE_BINARY, max_output_bytes=256).detect()
         self.assertLess(time.monotonic() - started, 2)
 
+    @unittest.skipUnless(os.name == "posix", "POSIX process-group behavior")
+    def test_timeout_bounds_descendants_holding_output_open(self) -> None:
+        started = time.monotonic()
+        with mock.patch.dict(os.environ, {"DETECT_HARNESS_FAKE_MODE": "linger"}):
+            with self.assertRaises(InvocationError) as raised:
+                Client(binary_path=FAKE_BINARY, timeout=0.2).detect()
+        self.assertIn("timed out", str(raised.exception))
+        self.assertLess(time.monotonic() - started, 2)
+
+    def test_scope_directory_is_trimmed(self) -> None:
+        scope = Scope(mode="project", dir="  /tmp/project  ")
+        detection = self.client.detect(scope)[0]
+        self.assertEqual(detection.scope_dir, "/tmp/project")
+
     def test_project_scope_and_zoo_code(self) -> None:
         scope = project_scope("/tmp/project")
         detection = self.client.detect(scope)[0]

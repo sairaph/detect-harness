@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"strings"
+	"syscall"
 )
 
 const maximumConfigSize = 8 << 20
@@ -77,6 +78,11 @@ func (i *Installer) Plan(ctx context.Context, ids []ID, desired DesiredState, op
 	if scopeErr != nil {
 		return invalidSelectionPlan(ids, desired, scopeErr.Error(), ScopeGlobal, "")
 	}
+	if scope.Mode == ScopeProject {
+		if err := projectDirError(i.system, scope.Dir); err != nil {
+			return invalidSelectionPlan(ids, desired, err.Error(), ScopeProject, scope.Dir)
+		}
+	}
 	plan := &Plan{changes: make([]plannedChange, 0, len(ids))}
 	seen := make(map[ID]struct{}, len(ids))
 	for _, id := range ids {
@@ -86,14 +92,16 @@ func (i *Installer) Plan(ctx context.Context, ids []ID, desired DesiredState, op
 		}
 		seen[canonical] = struct{}{}
 		definition, found := definitionFor(id)
-		if !found {
-			plan.changes = append(plan.changes, plannedChange{Change: Change{HarnessID: id, Desired: desired, State: ChangeUnavailable, Reason: "unknown harness"}})
-			continue
-		}
-		change := plannedChange{Change: Change{HarnessID: definition.ID, Name: definition.Name, Desired: desired}}
+		change := plannedChange{Change: Change{HarnessID: canonical, Name: definition.Name, Desired: desired}}
 		if scope.Mode == ScopeProject {
 			change.Scope = ScopeProject
 			change.ScopeDir = scope.Dir
+		}
+		if !found {
+			change.State = ChangeUnavailable
+			change.Reason = "unknown harness"
+			plan.changes = append(plan.changes, change)
+			continue
 		}
 		if err := ctx.Err(); err != nil {
 			change.State = ChangeUnavailable
@@ -183,17 +191,14 @@ func (i *Installer) inspectLayers(definition harnessDefinition, scope Scope, tar
 	for _, layer := range definition.resolveLayers(scope, target, i.system, i.runtime) {
 		raw := layer.raw
 		if layer.path != "" {
-			if layer.path == target {
-				continue
-			}
-			snapshot, err := readSnapshot(i.system, layer.path)
+			content, exists, err := readLayer(i.system, layer.path)
 			if err != nil {
 				return nil, fmt.Errorf("inspect %s: %w", layer.name, err)
 			}
-			if !snapshot.exists {
+			if !exists {
 				continue
 			}
-			raw = snapshot.raw
+			raw = content
 		}
 		servers, err := layerServers(raw, definition.format, definition.topKey)
 		if err != nil {
@@ -217,6 +222,30 @@ func (i *Installer) inspectLayers(definition harnessDefinition, scope Scope, tar
 	return notes, nil
 }
 
+// readLayer reads an additional configuration layer for inspection. Unlike
+// readSnapshot it follows symbolic links, because the harness itself does and
+// the layer is never written.
+func readLayer(system hostSystem, path string) ([]byte, bool, error) {
+	info, err := system.Stat(path)
+	if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, false, errors.New("configuration path is not a regular file")
+	}
+	if info.Size() > maximumConfigSize {
+		return nil, false, fmt.Errorf("configuration exceeds %d bytes", maximumConfigSize)
+	}
+	raw, err := system.ReadFile(path)
+	if err != nil {
+		return nil, false, err
+	}
+	return raw, true, nil
+}
+
 func invalidSelectionPlan(ids []ID, desired DesiredState, reason string, scope ScopeMode, scopeDir string) *Plan {
 	plan := &Plan{changes: make([]plannedChange, 0, len(ids))}
 	seen := make(map[ID]struct{}, len(ids))
@@ -226,7 +255,8 @@ func invalidSelectionPlan(ids []ID, desired DesiredState, reason string, scope S
 			continue
 		}
 		seen[canonical] = struct{}{}
-		plan.changes = append(plan.changes, plannedChange{Change: Change{HarnessID: canonical, Desired: desired, State: ChangeUnavailable, Reason: reason, Scope: scope, ScopeDir: scopeDir}})
+		definition, _ := definitionFor(canonical)
+		plan.changes = append(plan.changes, plannedChange{Change: Change{HarnessID: canonical, Name: definition.Name, Desired: desired, State: ChangeUnavailable, Reason: reason, Scope: scope, ScopeDir: scopeDir}})
 	}
 	return plan
 }

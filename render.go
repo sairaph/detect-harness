@@ -26,7 +26,7 @@ const (
 func standardEntry(server StdioServer) map[string]any {
 	entry := map[string]any{
 		"command": server.Command,
-		"args":    append([]string(nil), server.Args...),
+		"args":    cloneArgs(server.Args),
 	}
 	if len(server.Env) > 0 {
 		entry["env"] = cloneEnv(server.Env)
@@ -54,6 +54,13 @@ func serverEntry(kind entryKind, server StdioServer) map[string]any {
 	}
 }
 
+// cloneArgs always returns a non-nil slice so an argument-less server encodes
+// as an empty array rather than null in every format.
+func cloneArgs(input []string) []string {
+	result := make([]string, 0, len(input))
+	return append(result, input...)
+}
+
 func cloneEnv(input map[string]string) map[string]string {
 	result := make(map[string]string, len(input))
 	for key, value := range input {
@@ -62,6 +69,9 @@ func cloneEnv(input map[string]string) map[string]string {
 	return result
 }
 
+// semanticEqual compares two decoded configuration values structurally. Empty
+// containers and null are treated as absent members, so `"args": []`,
+// `"args": null`, and a missing args key all describe the same server.
 func semanticEqual(left, right any) bool {
 	return reflect.DeepEqual(normalizeValue(left), normalizeValue(right))
 }
@@ -82,7 +92,11 @@ func normalizeValue(value any) any {
 		iterator := reflected.MapRange()
 		for iterator.Next() {
 			key := fmt.Sprint(iterator.Key().Interface())
-			result[key] = normalizeValue(iterator.Value().Interface())
+			normalized := normalizeValue(iterator.Value().Interface())
+			if isEmptyContainer(normalized) {
+				continue
+			}
+			result[key] = normalized
 		}
 		return result
 	case reflect.Slice, reflect.Array:
@@ -94,6 +108,18 @@ func normalizeValue(value any) any {
 	default:
 		return value
 	}
+}
+
+func isEmptyContainer(value any) bool {
+	switch typed := value.(type) {
+	case nil:
+		return true
+	case []any:
+		return len(typed) == 0
+	case map[string]any:
+		return len(typed) == 0
+	}
+	return false
 }
 
 func renderChange(definition harnessDefinition, scope Scope, raw []byte, server StdioServer, desired DesiredState, allowReplace bool) (ownership, []byte, string, error) {
@@ -214,10 +240,10 @@ func parseJSONDocument(raw []byte, format configFormat) (map[string]any, *hujson
 }
 
 // jsonServers returns the server container under topKey, or an empty map when
-// the key is absent. A present key that is not an object is an error.
+// the key is absent or null. A present key that is not an object is an error.
 func jsonServers(root map[string]any, topKey string) (map[string]any, error) {
 	existing, found := root[topKey]
-	if !found {
+	if !found || existing == nil {
 		return map[string]any{}, nil
 	}
 	servers, ok := existing.(map[string]any)
@@ -376,7 +402,16 @@ func mutateHumanJSON(document *hujson.Value, topKey, name string, expected map[s
 	}
 	servers, ok := root.Members[topIndex].Value.Value.(*hujson.Object)
 	if !ok {
-		return fmt.Errorf("%s must be an object", topKey)
+		literal, isLiteral := root.Members[topIndex].Value.Value.(hujson.Literal)
+		if !isLiteral || literal.Kind() != 'n' {
+			return fmt.Errorf("%s must be an object", topKey)
+		}
+		if desired == Absent {
+			return nil
+		}
+		// A null container is treated as empty and replaced by a real object.
+		servers = &hujson.Object{}
+		root.Members[topIndex].Value.Value = servers
 	}
 	serversIndent := memberIndent(servers, rootIndent+layout.unit)
 	serverIndex := humanJSONMember(servers, name)
@@ -460,10 +495,11 @@ func memberIndent(object *hujson.Object, fallback string) string {
 
 // appendHumanMember appends name: value to object on a new line indented like
 // its siblings. The trailing-comma style of the object is preserved, and an
-// empty object gains a closing brace on its own line at the parent's indent.
+// empty object gains a closing brace on its own line at the parent's indent
+// unless it already holds a comment, which is kept in place.
 func appendHumanMember(object *hujson.Object, name string, value hujson.Value, indent, parentIndent string, layout humanLayout) {
 	trailingComma := len(object.Members) > 0 && object.Members[len(object.Members)-1].Value.AfterExtra != nil
-	if len(object.Members) == 0 {
+	if len(object.Members) == 0 && !bytes.Contains(object.AfterExtra, []byte("/")) {
 		object.AfterExtra = hujson.Extra(layout.eol + parentIndent)
 	}
 	value.BeforeExtra = hujson.Extra(" ")
@@ -759,6 +795,11 @@ func renderYAMLChange(raw []byte, server StdioServer, desired DesiredState, allo
 	var sequence *yaml.Node
 	if keyIndex >= 0 {
 		sequence = root.Content[keyIndex+1]
+		if sequence.Kind == yaml.ScalarNode && sequence.Tag == "!!null" {
+			// A null container is treated as empty and replaced by a real list.
+			sequence = &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
+			root.Content[keyIndex+1] = sequence
+		}
 		if sequence.Kind != yaml.SequenceNode {
 			return "", nil, "", errors.New("mcpServers must be a sequence")
 		}
@@ -827,7 +868,7 @@ func continueEntry(server StdioServer) map[string]any {
 		"name":    server.Name,
 		"type":    "stdio",
 		"command": server.Command,
-		"args":    append([]string(nil), server.Args...),
+		"args":    cloneArgs(server.Args),
 	}
 	if len(server.Env) > 0 {
 		entry["env"] = cloneEnv(server.Env)

@@ -22,6 +22,16 @@ if tree_mode in ("hang-tree", "overflow-tree"):
         sys.stdout.flush()
     time.sleep(60)
 
+if tree_mode == "linger":
+    # Answer immediately, then leave a descendant holding stdout open.
+    sys.stdout.write(json.dumps({"version": 1, "ok": True, "detections": []}))
+    sys.stdout.flush()
+    subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        stdin=subprocess.DEVNULL,
+    )
+    raise SystemExit(0)
+
 if len(sys.argv) != 1:
     print(json.dumps({"version": 1, "ok": False, "error": {"code": "unexpected_args", "message": "arguments supplied"}}))
     raise SystemExit(2)

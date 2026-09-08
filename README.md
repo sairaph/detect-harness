@@ -181,6 +181,8 @@ plan := installer.Plan(ctx, selected, detectharness.Present, detectharness.PlanO
 
 Harnesses without project support (`claude-desktop`, `windsurf`, `cline`) return
 `unavailable` / `skipped`, never an error that aborts a multi-harness operation.
+The project directory must already exist; detect-harness creates the
+harness-specific files inside it but never the directory itself.
 The zero-value `Scope` selects global configuration. Per-harness discovery,
 merge, and trust behavior is documented in [`docs/project-scope.md`](docs/project-scope.md).
 
@@ -276,8 +278,13 @@ binaries for macOS, Linux, and Windows on AMD64 and ARM64.
   to their canonical replacement via `CanonicalID`. This ensures protocol-level
   callers deduplicate IDs consistently with the registry.
 - Additional configuration layers a harness merges (currently OpenCode) are
-  inspected read-only; an unreadable layer makes the change `unavailable`
-  rather than being ignored.
+  inspected read-only, following symbolic links; an unreadable layer makes the
+  change `unavailable` rather than being ignored.
+- Ownership comparison treats null and empty members as absent, so
+  `"args": []`, `"args": null`, and a missing `args` key describe the same
+  server. Servers without arguments always render `args` as an empty array.
+- Project scope requires an existing directory. A missing path or a path that
+  is not a directory makes every change `unavailable` instead of creating it.
 - Fresh JSONC files are written as two-space indented standard JSON; an
   existing file's own indentation is followed for inserted members.
 

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	detectharness "github.com/sairaph/detect-harness"
 	"github.com/sairaph/detect-harness/protocol"
@@ -70,6 +71,9 @@ func execute(ctx context.Context, request protocol.Request) (protocol.Response, 
 	response := protocol.Response{Version: protocol.Version, OK: true}
 	scope := detectharness.Scope{}
 	if request.Scope != nil {
+		if request.Scope.Mode != detectharness.ScopeProject || strings.TrimSpace(request.Scope.Dir) == "" {
+			return protocol.Response{}, errors.New(`scope must be {"mode":"project","dir":"<project directory>"}`)
+		}
 		scope = *request.Scope
 	}
 	switch request.Operation {

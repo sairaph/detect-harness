@@ -74,12 +74,42 @@ func (d harnessDefinition) resolveConfig(scope Scope, system hostSystem, environ
 }
 
 // resolveLayers lists the additional configuration sources for the scope, or
-// nil when the harness has none.
+// nil when the harness has none. File layers are cleaned, deduplicated, and
+// never include the managed target itself, so an environment variable that
+// aliases a known file cannot produce duplicate or self-referential notes.
 func (d harnessDefinition) resolveLayers(scope Scope, target string, system hostSystem, environment runtimeEnvironment) []configLayer {
 	if d.layers == nil {
 		return nil
 	}
-	return d.layers(scope, target, system, environment)
+	samePath := func(left, right string) bool {
+		if environment.platform == "windows" {
+			return strings.EqualFold(left, right)
+		}
+		return left == right
+	}
+	cleanTarget := filepath.Clean(target)
+	var result []configLayer
+	for _, layer := range d.layers(scope, target, system, environment) {
+		if layer.path == "" {
+			result = append(result, layer)
+			continue
+		}
+		layer.path = filepath.Clean(layer.path)
+		if samePath(layer.path, cleanTarget) {
+			continue
+		}
+		duplicate := false
+		for _, existing := range result {
+			if existing.path != "" && samePath(existing.path, layer.path) {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			result = append(result, layer)
+		}
+	}
+	return result
 }
 
 // projectFile returns a resolver that joins the project directory with rel.
@@ -110,10 +140,12 @@ func claudeDesktopConfig(_ hostSystem, environment runtimeEnvironment) pathResol
 	}
 }
 
+// zedConfig follows Zed's paths::config_dir: %APPDATA%\Zed on Windows, the XDG
+// configuration root on Linux, and a fixed ~/.config/zed on macOS.
 func zedConfig(_ hostSystem, environment runtimeEnvironment) pathResolution {
 	switch environment.platform {
 	case "darwin":
-		return available(environment.appSupport("zed", "settings.json"))
+		return available(environment.home(".config", "zed", "settings.json"))
 	case "windows":
 		return joinResolution(environment.appData(), "Zed", "settings.json")
 	default:

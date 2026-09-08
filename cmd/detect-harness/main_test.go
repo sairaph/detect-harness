@@ -45,6 +45,26 @@ func TestExecuteRender(t *testing.T) {
 	}
 }
 
+func TestExecuteRejectsMalformedScopeForEveryOperation(t *testing.T) {
+	server := &detectharness.StdioServer{Name: "example", Command: "/example"}
+	for _, scope := range []*detectharness.Scope{
+		{Dir: "/project"},
+		{Mode: "project"},
+		{Mode: "workspace", Dir: "/project"},
+		{Mode: "project", Dir: "   "},
+	} {
+		for _, request := range []protocol.Request{
+			{Version: 1, Operation: protocol.Detect, Scope: scope},
+			{Version: 1, Operation: protocol.Render, Server: server, Harness: detectharness.Cursor, Scope: scope},
+			{Version: 1, Operation: protocol.Update, Server: server, Harnesses: []detectharness.ID{detectharness.Cursor}, Desired: detectharness.Present, DryRun: true, Scope: scope},
+		} {
+			if _, err := execute(context.Background(), request); err == nil {
+				t.Fatalf("expected malformed scope %#v to be rejected for %s", scope, request.Operation)
+			}
+		}
+	}
+}
+
 func TestExecuteRejectsInvalidUpdateContract(t *testing.T) {
 	server := &detectharness.StdioServer{Name: "example", Command: "/example"}
 	for _, request := range []protocol.Request{

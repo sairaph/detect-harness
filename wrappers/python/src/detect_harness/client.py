@@ -379,17 +379,26 @@ class Client:
         deadline = None if self._timeout is None else time.monotonic() + self._timeout
         writer.start()
 
+        def remaining_time() -> float | None:
+            return None if deadline is None else max(0.0, deadline - time.monotonic())
+
         timed_out = False
         try:
-            remaining = None if deadline is None else max(0.0, deadline - time.monotonic())
-            return_code = process.wait(timeout=remaining)
+            return_code = process.wait(timeout=remaining_time())
         except subprocess.TimeoutExpired:
             timed_out = True
             terminate()
             return_code = process.wait()
         writer.join()
+        # The companion may have exited while a descendant still holds the
+        # output pipes open; the deadline bounds that wait too, and the whole
+        # process group is terminated when it expires.
         for reader in readers:
-            reader.join()
+            reader.join(remaining_time())
+            if reader.is_alive():
+                timed_out = True
+                terminate()
+                reader.join()
         if kill_timer is not None:
             kill_timer.cancel()
         process.stdout.close()
@@ -397,8 +406,9 @@ class Client:
 
         stdout_text = b"".join(stdout).decode("utf-8", errors="replace")
         stderr_text = b"".join(stderr).decode("utf-8", errors="replace")
-        exit_code = return_code if return_code >= 0 else None
-        exit_signal = -return_code if return_code < 0 else None
+        killed_by_signal = os.name == "posix" and return_code < 0
+        exit_code = None if killed_by_signal else return_code
+        exit_signal = -return_code if killed_by_signal else None
         details: _InvocationDetails = {
             "exit_code": exit_code,
             "signal": exit_signal,
@@ -553,9 +563,10 @@ def _parse_results(value: object) -> tuple[UpdateResult, ...]:
 def _apply_scope(request: dict[str, object], scope: Scope | None) -> None:
     if scope is None:
         return
-    if scope.mode != "project" or not str(scope.dir).strip():
+    directory = str(scope.dir).strip()
+    if scope.mode != "project" or not directory:
         raise ValueError("project scope requires a directory")
-    request["scope"] = scope._protocol_value()
+    request["scope"] = {"mode": "project", "dir": directory}
 
 
 def _optional_project(item: Mapping[str, object], path: str) -> ProjectScope | None:

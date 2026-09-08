@@ -120,10 +120,11 @@ func (s Scope) normalize() (Scope, error) {
 	case ScopeGlobal:
 		return Scope{}, nil
 	case ScopeProject:
-		if strings.TrimSpace(s.Dir) == "" {
+		dir := strings.TrimSpace(s.Dir)
+		if dir == "" {
 			return Scope{}, errors.New("project scope requires a directory")
 		}
-		absolute, err := filepath.Abs(s.Dir)
+		absolute, err := filepath.Abs(dir)
 		if err != nil {
 			return Scope{}, fmt.Errorf("resolve project directory: %w", err)
 		}
