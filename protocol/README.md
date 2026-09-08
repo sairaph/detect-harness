@@ -11,6 +11,11 @@ Operations:
 - `update`: plan selected harness changes and optionally apply them. Set
   `dryRun` to return only `changes`.
 
+Every operation accepts an optional `scope` object, `{"mode": "project",
+"dir": "/absolute/project/dir"}`, that targets directory-local configuration;
+without it the operation uses global configuration. Deprecated harness ids such
+as `roo-code` are accepted and reported under their canonical id.
+
 The process exits `0` for a valid protocol operation, even when individual
 harness results are conflicts or failures. It exits non-zero only when the
 request or operation itself is invalid. Consumers must inspect both `ok` and

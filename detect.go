@@ -150,9 +150,9 @@ func (i *Installer) DetectScoped(ctx context.Context, scope Scope) ([]Detection,
 	return i.detectAll(ctx, normalized), nil
 }
 
-// detectAll probes every harness for the supplied scope. Global scope keeps the
-// original install-evidence behavior; project scope reports whether a
-// directory-local configuration file is present.
+// detectAll probes every harness for the supplied scope. Global scope reports
+// installation evidence and the resolved global configuration path; project
+// scope reports whether a directory-local configuration file is present.
 func (i *Installer) detectAll(_ context.Context, scope Scope) []Detection {
 	results := make([]Detection, 0, len(registry))
 	for _, definition := range registry {

@@ -31,3 +31,7 @@ malformed-response failures throw subclasses of `DetectHarnessError`.
 `update` returns an `UpdateOutcome`; its `changes` are plans and its `results`
 contain one `UpdateResult` per selected harness. The default conflict policy is
 `error`; pass `conflictPolicy: "replace"` explicitly to replace conflicts.
+
+Pass `projectScope(dir)` to `detect`, `render`, or the `scope` option of `plan`
+and `update` to target directory-local configuration instead of the global
+files. Detections, changes, and results then carry `scope` and `scopeDir`.

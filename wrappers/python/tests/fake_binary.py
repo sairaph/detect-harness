@@ -64,8 +64,8 @@ elif request["operation"] == "update":
                 else {"action": "add"}
             ),
             **scope_fields,
-            "before": "obsolete",
-            "after": "obsolete",
+            "before": "ignored",
+            "after": "ignored",
         }
         for harness in request["harnesses"]
     ]

@@ -847,7 +847,8 @@ fn kill_process_group(pid: u32, sig: i32) {
 
 #[cfg(not(unix))]
 fn kill_process_group(pid: u32, _sig: i32) {
-    // On Windows we cannot easily kill the process group; skip.
+    // Windows has no process groups in this model; only the direct child is
+    // terminated by the caller.
     let _ = pid;
 }
 

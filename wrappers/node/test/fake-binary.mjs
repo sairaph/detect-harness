@@ -49,8 +49,8 @@ if (process.argv.length !== 2) {
       state: request.dryRun ? "noop" : "ready",
       ...(request.dryRun ? { reason: request.conflictPolicy } : { action: "add" }),
       ...scopeFields,
-      before: "obsolete",
-      after: "obsolete",
+      before: "ignored",
+      after: "ignored",
     }));
     const response = { version: 1, ok: true, changes };
     if (!request.dryRun) {

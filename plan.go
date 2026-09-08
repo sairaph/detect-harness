@@ -58,7 +58,7 @@ func readSnapshot(system hostSystem, path string) (fileSnapshot, error) {
 // every outcome uniformly.
 //
 // Harnesses that merge additional configuration layers (for example OpenCode's
-// legacy config.json or $OPENCODE_CONFIG) are inspected for same-name entries
+// config.json or $OPENCODE_CONFIG) are inspected for same-name entries
 // that would shadow or outlive the managed entry. Under ConflictError such an
 // entry is reported as a conflict; under ConflictReplace the change proceeds
 // and Reason carries a warning naming the other layer.

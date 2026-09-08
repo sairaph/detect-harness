@@ -46,3 +46,9 @@ matching the Node and Python wrappers.
 
 `update` returns an `UpdateOutcome`; its `changes` are plans and its `results`
 contain one `UpdateResult` with a `ResultState` per selected harness.
+
+`Scope::project(dir)` builds a project scope for `detect_with_scope`,
+`render_with_scope`, `plan_with_conflict_policy_and_scope`, and
+`update_with_conflict_policy_and_scope`, which target directory-local
+configuration instead of the global files. Detections, changes, and results
+then carry `scope` and `scope_dir`.

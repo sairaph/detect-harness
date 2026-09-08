@@ -30,3 +30,8 @@ code. Invocation and malformed-response failures derive from
 `update` returns an `UpdateOutcome`; its `changes` are plans and its `results`
 contain one `UpdateResult` per selected harness. The default conflict policy is
 `error`; pass `conflict_policy="replace"` explicitly to replace conflicts.
+
+Pass `project_scope(directory)` as the `scope` argument of `detect`, `render`,
+`plan`, or `update` to target directory-local configuration instead of the
+global files. Detections, changes, and results then carry `scope` and
+`scope_dir`.

@@ -140,8 +140,8 @@ their persistence layer.
 
 ### Project scope
 
-Version 0.2 adds directory-local (per-project) configuration support for the 10
-harnesses that provide it:
+Directory-local (per-project) configuration is supported for the 10 harnesses
+that provide it:
 
 | Harness | Project file | Shareable | Reload hint |
 |---|---|---|---|
@@ -180,8 +180,9 @@ plan := installer.Plan(ctx, selected, detectharness.Present, detectharness.PlanO
 ```
 
 Harnesses without project support (`claude-desktop`, `windsurf`, `cline`) return
-`unavailable` / `skipped` — never an error that aborts a multi-harness operation.
-The zero-value `Scope` (global) preserves existing behavior exactly.
+`unavailable` / `skipped`, never an error that aborts a multi-harness operation.
+The zero-value `Scope` selects global configuration. Per-harness discovery,
+merge, and trust behavior is documented in [`docs/project-scope.md`](docs/project-scope.md).
 
 ### Resolve conflicts
 
@@ -197,7 +198,7 @@ options := detectharness.PlanOptions{
 Use `ConflictReplace` only when your installer owns the stable server name and
 intentionally wants to migrate its executable path or environment.
 
-OpenCode merges several configuration layers (legacy `config.json`, a sibling
+OpenCode merges several configuration layers (`config.json`, a sibling
 `opencode.json`, `.opencode/` directories, `$OPENCODE_CONFIG`,
 `$OPENCODE_CONFIG_DIR`, and `$OPENCODE_CONFIG_CONTENT`). `Plan` inspects them
 for a same-name entry that would shadow or outlive the managed one: under
@@ -269,9 +270,8 @@ binaries for macOS, Linux, and Windows on AMD64 and ARM64.
   five minutes are treated as stale and recovered.
 - Multi-harness changes report partial results instead of hiding failures.
 - Serialized protocol plans do not include complete user config contents.
-- `WriteFileAtomic` creates the parent directory chain if it does not exist, so
-  project scopes can write to paths like `.continue/mcpServers/` without
-  requiring prior directory setup.
+- Missing parent directories are created on apply, so project scopes can write
+  to paths like `.continue/mcpServers/` without prior directory setup.
 - Deprecated harness IDs (e.g. `"roo-code"`) are accepted as input and resolved
   to their canonical replacement via `CanonicalID`. This ensures protocol-level
   callers deduplicate IDs consistently with the registry.
@@ -306,7 +306,7 @@ The root [`package.json`](package.json) is the version authority. Update every
 wrapper manifest together with:
 
 ```bash
-npm run version:set -- 0.2.0
+npm run version:set -- <X.Y.Z>
 npm run version:check
 ```
 

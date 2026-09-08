@@ -94,15 +94,14 @@ type ProjectScope struct {
 type ScopeMode string
 
 const (
-	// ScopeGlobal is the zero-value scope: system/user configuration used today.
-	// It matches existing global behavior exactly.
+	// ScopeGlobal is the zero-value scope and selects system/user configuration.
 	ScopeGlobal ScopeMode = ""
 	// ScopeProject targets a directory-local (per-project) configuration.
 	ScopeProject ScopeMode = "project"
 )
 
 // Scope selects where configuration is detected and applied. The zero value is
-// global scope and preserves existing behavior.
+// global scope.
 type Scope struct {
 	Mode ScopeMode `json:"mode,omitempty"`
 	// Dir is the project directory. It is required when Mode is ScopeProject and

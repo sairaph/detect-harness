@@ -1,245 +1,157 @@
-# Project-scoped MCP configuration (v0.2.0 design)
+# Project-scoped configuration
 
-Status: **implemented** in v0.2.0. Non-breaking, additive change.
+detect-harness manages MCP server registrations in two scopes. Global scope
+targets each harness's system or user configuration. Project scope targets a
+directory-local configuration inside a caller-supplied project directory, for
+the harnesses that read one. Project scope lets a user keep different MCP
+servers, and different secrets, per project.
 
-## Goal
+The zero-value `Scope` selects global scope. `ProjectScopeDir(dir)` selects
+project scope; `DetectOptions` and `PlanOptions` carry it, and `Detection`,
+`Change`, and `Result` echo it back through their `Scope` and `ScopeDir`
+fields so a project hit is distinguishable from a global one. The catalog
+returned by `Supported()` exposes a `Project` field with the project file path,
+reload hint, lifecycle summary, and whether the file is meant to be committed
+or gated behind a trust prompt; it is nil for global-only harnesses.
 
-detect-harness today detects and edits **global** (system/user) MCP
-configurations. Many harnesses also support **per-project** (directory-scoped)
-MCP configs — e.g. Claude Code's `.mcp.json`. Per-project configs let a user
-keep different MCP servers (and different API keys) per project.
+## Support matrix
 
-This feature adds the ability to detect and mutate project-scoped configs for
-every harness that supports them, behind an opt-in `Scope`, without changing
-existing global behavior or breaking any caller.
+Sources: each tool's official documentation and its configuration-loading
+source code (listed at the end). "Pre-create safe" means the tool reads a
+project file that exists before its first run in that directory without
+overwriting it.
 
-## Non-breaking contract
-
-- Go library: only **adds** types, fields, and options. Zero values preserve
-  today's global behavior. No existing symbol is renamed, removed, or changes
-  semantics.
-- Protocol (companion binary + wrappers): adds **optional** request/response
-  fields. Wire `version` stays `1`. An old client against a new binary ignores
-  `scope` and behaves globally; a new client against an old binary sends `scope`
-  and the old binary ignores it (returns global results).
-- Catalog (`Supported()`): gains an optional `Project` field; global-only
-  harnesses omit it.
-
-## Support matrix (13 harnesses)
-
-Sources: official docs plus the config-loading source code of each tool (see
-end of file). `Pre-create` = "is it safe for our library to create the project
-file before the tool ever runs in that directory?"
-
-| Harness | Project? | Project file (in project dir) | Hold key | Discovery | Merge with global | Pre-create safe? | Reload |
+| Harness | Project? | Project file | Key | Discovery | Merge with global | Pre-create safe | Reload |
 |---|---|---|---|---|---|---|---|
-| claude-desktop | **No** | — | `mcpServers` | — | — | n/a | restart app |
-| claude-code | Yes | `.mcp.json` | `mcpServers` | cwd | per-name winner (Local>Project>User; **no field merge**) | Yes (approval gate on first run) | restart session |
+| claude-desktop | No | — | `mcpServers` | — | — | n/a | restart app |
+| claude-code | Yes | `.mcp.json` | `mcpServers` | cwd | per-name winner (local > project > user; no field merge) | Yes (approval gate on first run) | restart session |
 | cursor | Yes | `.cursor/mcp.json` | `mcpServers` | cwd | additive union; project wins on name clash | Yes | restart Cursor |
-| codex | Yes | `.codex/config.toml` | `[mcp_servers.<id>]` | **project_root → cwd walk** | deep per-field; closest-to-cwd wins | Yes (trust gate) | restart Codex |
+| codex | Yes | `.codex/config.toml` | `[mcp_servers.<id>]` | project root → cwd walk | deep per-field; closest to cwd wins | Yes (trust gate) | restart Codex |
 | gemini-cli | Yes | `.gemini/settings.json` | `mcpServers` | cwd only | deep per-field; project wins | Yes (trust gate) | `/mcp reload` or restart |
-| windsurf | **No** | — | `mcpServers` | — | — | n/a | refresh / restart |
-| zed | Yes | `.zed/settings.json` | `context_servers` | cwd | per-key deep; project wins | Yes | **live** (settings file watched) |
-| cline | **No** | — | `mcpServers` | — | — | n/a | watched (global only) |
-| zoo-code | Yes | `.roo/mcp.json` | `mcpServers` | 1st workspace folder | additive; project wins per-name | Yes | **hot-reload** (file watched) |
-| amazon-q | Yes | `.amazonq/mcp.json` | `mcpServers` | cwd only | additive per-server; workspace wins | Yes (`q mcp add` even auto-creates empty) | restart session |
-| continue | Yes | `.continue/mcpServers/*.{yaml,json}` (a **directory of block files**) | `mcpServers` (YAML **list**) | workspace dirs | concat + dedupe by name | Yes | save → hot-reload |
-| opencode | Yes | `opencode.jsonc` (existing `opencode.json` honored when alone) | `mcp` (object) | **git-root → cwd walk**, then `.opencode/` dirs | deep per-key; later layer wins | Yes | restart OpenCode |
-| vscode | Yes | `.vscode/mcp.json` | `servers` (+`inputs`) | cwd | additive union | Yes (trust gate) | code-lens / `MCP: List Servers` restart |
+| windsurf | No | — | `mcpServers` | — | — | n/a | refresh or restart |
+| zed | Yes | `.zed/settings.json` | `context_servers` | cwd | per-key deep; project wins | Yes | live (settings file watched) |
+| cline | No | — | `mcpServers` | — | — | n/a | watched (global only) |
+| zoo-code | Yes | `.roo/mcp.json` | `mcpServers` | first workspace folder | additive; project wins per name | Yes | hot-reload (file watched) |
+| amazon-q | Yes | `.amazonq/mcp.json` | `mcpServers` | cwd only | additive per server; workspace wins | Yes (`q mcp add` auto-creates an empty file) | restart session |
+| continue | Yes | `.continue/mcpServers/*.{yaml,json}` (a directory of block files) | `mcpServers` (YAML list) | workspace dirs | concatenate, dedupe by name | Yes | hot-reload on save |
+| opencode | Yes | `opencode.jsonc` (a lone existing `opencode.json` is honored) | `mcp` (object) | git root → cwd walk, then `.opencode/` dirs | deep per-key; later layer wins | Yes | restart OpenCode |
+| vscode | Yes | `.vscode/mcp.json` | `servers` (+ `inputs`) | cwd | additive union | Yes (trust gate) | code lens or `MCP: List Servers` |
 
-**10 of 13** harnesses support project-scoped config. `claude-desktop`,
-`windsurf`, and `cline` are global-only and will report `unavailable` for
-project scope.
+Ten of the thirteen harnesses support project scope. `claude-desktop`,
+`windsurf`, and `cline` are global-only: project-scope detection reports them
+as `unavailable`, and project-scope plans produce a `skipped` result with a
+reason rather than an error that aborts a multi-harness operation.
 
-Note: **Roo Code** was archived / discontinued by its maintainer in May 2026.
-We keep supporting its `.roo/mcp.json` (and the community fork follows the same
-convention), but it is flagged in the catalog.
-
-## Per-harness lifecycle notes
+## Per-harness notes
 
 - **claude-code**: `.mcp.json` is created manually or by
-  `claude mcp add --scope project` (create-or-update, not overwrite). Never
-  auto-created by a bare `claude` run. On first session in a dir, Claude Code
-  reads it and prompts the user to **approve** each project server (a cloned
-  repo cannot auto-run servers). Approval state lives in `~/.claude.json` or in
-  `.claude/settings.json` (`enableAllProjectMcpServers`). In an **untrusted**
-  folder (workspace-trust dialog) committed approval flags are ignored until
-  the user trusts the workspace. Reload = **restart the session** (read at
-  session start; no hot-reload of the server list).
-- **cursor**: project file created manually / UI / `cursor mcp add`. Not
-  auto-created on workspace open. Reload = **restart Cursor**. Streamable-HTTP
-  transport requires Cursor v0.48.0+.
-- **codex**: project file **never written by Codex** (read-only). Enabled only
-  after the project is **trusted**; until then servers are parsed but disabled.
+  `claude mcp add --scope project`, which creates or updates without
+  overwriting. A bare `claude` run never creates it. On the first session in a
+  directory Claude Code prompts the user to approve each project server, since
+  a cloned repository must not auto-run servers. Approval state lives in
+  `~/.claude.json` or in `.claude/settings.json`
+  (`enableAllProjectMcpServers`). In an untrusted folder committed approval
+  flags are ignored until the user trusts the workspace. The server list is
+  read at session start, so reload means restarting the session.
+- **cursor**: the project file is created manually, through the MCP tools UI,
+  or by `cursor mcp add`. It is not auto-created on workspace open. Reload
+  means restarting Cursor.
+- **codex**: Codex never writes the project file. Project servers are enabled
+  only after the project is trusted; until then they are parsed but disabled.
   Codex walks `.codex/config.toml` from the project root down to cwd and
-  **deep-merges** all layers (closest-to-cwd wins per field). Project config
-  cannot change provider/auth keys (they are stripped with a warning).
-- **gemini-cli**: project file created manually or via `gemini mcp add`. Read
-  on load; not overwritten. Workspace settings are skipped when the workspace
-  is the home dir; a trust check gates whether they apply. Reload = `/mcp
-  reload` in session, else restart.
-- **zed**: project `.zed/settings.json` overrides global per-key (deep). Zed
-  **watches settings files live** — edits apply without a restart; changing a
-  server entry restarts that server. A worktree-trust prompt on first open is
-  independent of the file.
-- **zoo-code**: `<workspace>/.roo/mcp.json`. Global file lives in VS Code
-  `globalStorage` `ZooCodeOrganization.zoo-code` (not `~/.roo/`); Zoo Code never
-  writes defaults into the project file. **Hot-reloaded** via a
-  `FileSystemWatcher` (debounced ~500 ms).
-- **amazon-q**: `.amazonq/mcp.json` (legacy, loaded by default via the built-in
-  agent's `useLegacyMcpJson: true`). `q mcp add --scope workspace` auto-creates
-  `{ "mcpServers": {} }` if missing, otherwise reads → mutates → saves
-  (preserving content). Additive per-server; workspace wins on name conflict.
-  Reload = restart the chat session.
-- **continue**: project MCP is a **directory of block files**
-  `.continue/mcpServers/*.{yaml,json}`, each a single server or a
-  `{mcpServers:{...}}` map; concatenated and deduped by name. (A project
-  `.continue/config.yaml` is **not** a supported merge source — `config.yaml`
-  is global only.) Hot-reloaded on save. Secrets via `${{ secrets.NAME }}`.
-- **opencode**: project `opencode.json` then `opencode.jsonc` per directory,
-  merged **deep per-key** on top of the global layers; a later layer wins.
-  Global lives in `<xdg config>/opencode` on **every platform** (xdg-basedir,
-  so `%USERPROFILE%\.config\opencode` on Windows, never `%APPDATA%`) and is
-  itself three files merged in order: legacy `config.json`, `opencode.json`,
-  `opencode.jsonc`. On first run without any of them OpenCode seeds
-  `opencode.jsonc`, so that is the file we create and prefer. Full order,
-  lowest first: global files → `$OPENCODE_CONFIG` → project files walked from
-  the git root to cwd → every `.opencode/` directory on that walk → `~/.opencode/`
-  → `$OPENCODE_CONFIG_DIR` → `$OPENCODE_CONFIG_CONTENT`.
-  `OPENCODE_DISABLE_PROJECT_CONFIG=1` skips project files. Local-command shape
-  uses `command` as an **array** and `environment` (not `env`). Reload = restart.
-  Verified against `anomalyco/opencode` (`packages/core/src/global.ts`,
+  deep-merges every layer, closest to cwd winning per field. Project
+  configuration cannot change provider or auth keys; those are stripped with a
+  warning.
+- **gemini-cli**: the project file is created manually or by
+  `gemini mcp add`. It is read on load and not overwritten. Workspace settings
+  are skipped when the workspace is the home directory, and a trust check
+  gates whether they apply. Reload with `/mcp reload` in session, otherwise
+  restart.
+- **zed**: `.zed/settings.json` overrides global settings per key. Zed watches
+  settings files, so edits apply without a restart and changing a server entry
+  restarts that server. A separate worktree-trust prompt may appear on first
+  open.
+- **zoo-code**: `<workspace>/.roo/mcp.json`. The global file lives in VS Code
+  `globalStorage` under `ZooCodeOrganization.zoo-code`, not `~/.roo/`. Zoo Code
+  never writes defaults into the project file and hot-reloads it through a
+  `FileSystemWatcher` (debounced about 500 ms). Zoo Code is the community
+  successor of the discontinued Roo Code extension and keeps its `.roo/`
+  convention; the `roo-code` id remains accepted as an alias of `zoo-code`.
+- **amazon-q**: `.amazonq/mcp.json` is loaded by default through the built-in
+  agent's `useLegacyMcpJson: true`. `q mcp add --scope workspace` creates
+  `{ "mcpServers": {} }` when the file is missing and otherwise reads,
+  mutates, and saves it, preserving content. Merging is additive per server
+  with the workspace winning on name conflicts. Reload means restarting the
+  chat session.
+- **continue**: project MCP configuration is a directory of block files,
+  `.continue/mcpServers/*.{yaml,json}`, each holding a single server or a
+  `{mcpServers: {...}}` map; they are concatenated and deduped by name. A
+  project `.continue/config.yaml` is not a merge source; `config.yaml` is
+  global only. Changes hot-reload on save. Secrets use `${{ secrets.NAME }}`.
+- **opencode**: within a directory OpenCode loads `opencode.json` then
+  `opencode.jsonc`, deep-merging per key so the later file wins. The global
+  directory is `<xdg config>/opencode` on every platform (xdg-basedir, so
+  `%USERPROFILE%\.config\opencode` on Windows, never `%APPDATA%`), and holds
+  three files merged in order: `config.json` (kept for older installs),
+  `opencode.json`, `opencode.jsonc`. On first run without any of them OpenCode
+  seeds `opencode.jsonc`, which is why it is the file detect-harness creates
+  and prefers. The full merge order, lowest precedence first, is: global files,
+  `$OPENCODE_CONFIG`, project files walked from the git root to cwd, every
+  `.opencode/` directory on that walk, `~/.opencode/`, `$OPENCODE_CONFIG_DIR`,
+  `$OPENCODE_CONFIG_CONTENT`. `OPENCODE_DISABLE_PROJECT_CONFIG=1` skips project
+  files. The local-command shape uses `command` as an array and `environment`
+  rather than `env`. Reload means restarting OpenCode. Verified against
+  `anomalyco/opencode` (`packages/core/src/global.ts`,
   `packages/opencode/src/config/{config,paths}.ts`).
-- **vscode**: `.vscode/mcp.json` with top-level `servers` (+ optional `inputs`
-  for `${input:id}` secrets). First server start shows a **trust** dialog
-  (reset via `MCP: Reset Trust`). Reload via code-lenses in `mcp.json` or
-  `MCP: List Servers → restart`; `chat.mcp.autostart` auto-restarts on change.
-  No window reload required. Shipped in VS Code 1.99 (April 2025), GA now.
+- **vscode**: `.vscode/mcp.json` with a top-level `servers` object and an
+  optional `inputs` list for `${input:id}` secrets. The first server start
+  shows a trust dialog, resettable with `MCP: Reset Trust`. Reload through the
+  code lenses in `mcp.json` or `MCP: List Servers`, then restart;
+  `chat.mcp.autostart` restarts servers automatically on change. No window
+  reload is required.
 
-## Cross-cutting findings
+## Cross-cutting behavior
 
-- **Preemptive creation is safe for all 10 supported harnesses.** None
-  overwrite or inject defaults into an existing project file on launch; all
-  read it as-is. Three of them gate the result behind a **trust/approval**
-  dialog (claude-code, codex, vscode) and two more behind a trust check
-  (gemini-cli, and zed's separate worktree-trust). Our docs must surface this
-  so consumers can tell their users "approve/trust the workspace".
-- **Discovery differs and we will NOT replicate it.** Most harnesses read the
-  project file from the **cwd only**; codex walks project_root→cwd and opencode
-  walks cwd→git-root, both deep-merging layers. Our library will write a
-  **single deterministic file** in the directory the caller specifies, and the
-  catalog documents each tool's own walk/merge so the consumer understands
-  precedence. This keeps us a predictable "library + information" layer.
-- **Format/key is identical to global** for every supported harness (we already
-  render/mutate each format). Continue is the lone structural exception:
-  project scope is a *directory of block files* rather than one file.
-- **Reload varies widely** (live/hot-reload for zed, roo, continue; restart for
-  the rest; `/mcp reload` for gemini). The catalog exposes a per-scope
-  `ReloadHint`.
-- **Secrets**: prefer each tool's env/interpolation (`${VAR}`, `${env:VAR}`,
-  `${{ secrets.NAME }}`, `{env:VAR}`) and keep real values out of VCS. Several
-  project files are meant to be committed (claude-code, cursor, zed, vscode,
-  opencode) while others are local-only.
+- **Pre-creation is safe for all ten supported harnesses.** None overwrite or
+  inject defaults into an existing project file on launch. Three gate the
+  result behind a trust or approval dialog (claude-code, codex, vscode) and
+  two more behind a trust check (gemini-cli, and zed's worktree trust). The
+  catalog's `TrustGate` flag carries this so installers can tell users to
+  approve or trust the workspace.
+- **One deterministic file per harness.** detect-harness writes and reads a
+  single file in the directory the caller supplies, uniformly for all ten
+  harnesses. It does not replicate the parent-directory walks of codex and
+  opencode; the catalog documents each tool's own discovery and merge rules so
+  consumers understand precedence.
+- **Same format and key as global scope** for every supported harness, so the
+  same renderers apply. Continue is the one structural exception: its project
+  scope is a directory of block files, and detect-harness targets the single
+  canonical block file `.continue/mcpServers/detect-harness.yaml`, rendered
+  without the `name`, `version`, and `schema` metadata that only the global
+  `config.yaml` carries. Continue merges it with any sibling block files.
+- **OpenCode layers are inspected, never written.** The managed file is
+  `opencode.jsonc`, or a lone existing `opencode.json`. The other layers
+  OpenCode merges in the same scope (`config.json`, the sibling
+  `opencode.json`, `.opencode/` directories, `~/.opencode/`,
+  `$OPENCODE_CONFIG`, `$OPENCODE_CONFIG_DIR`, `$OPENCODE_CONFIG_CONTENT`) are
+  read-only conflict sources: a same-name entry there is a conflict under
+  `ConflictError` and a `Reason` warning under `ConflictReplace`. Global layers
+  are not conflict sources for project scope, because differing per-project
+  settings are the purpose of project scope. Existing layer files appear as
+  detection evidence.
+- **Reload varies.** Zed, Zoo Code, and Continue pick up changes live; Gemini
+  CLI offers `/mcp reload`; the rest need a restart. The catalog exposes a
+  per-scope `ReloadHint`.
+- **Secrets.** Prefer each tool's own interpolation (`${VAR}`, `${env:VAR}`,
+  `${{ secrets.NAME }}`, `{env:VAR}`) and keep real values out of version
+  control. The `Shareable` flag marks files intended to be committed.
 
-## Go API
+## Protocol
 
-### Scope
-
-```go
-// Scope selects where configuration is detected and applied.
-// The zero value is global scope (preserves v0.1.x behavior).
-type Scope struct {
-    Mode ScopeMode
-    Dir  string // absolute project directory; required when Mode == ScopeProject
-}
-
-type ScopeMode string
-
-const (
-    ScopeGlobal  ScopeMode = ""         // zero value → current behavior
-    ScopeProject ScopeMode = "project"
-)
-
-// ProjectScopeDir builds a project scope targeting dir.
-func ProjectScopeDir(dir string) Scope { return Scope{Mode: ScopeProject, Dir: dir} }
-```
-
-### Options
-
-`DetectOptions` and `PlanOptions` carry an optional `Scope` field. Zero value
-means global (unchanged from v0.1.x). `Ensure`, `Plan`, `Apply`, and `Detect`
-are scope-aware through these options.
-
-### Catalog metadata
-
-`Harness` has an optional `Project *ProjectScope` field (nil for global-only):
-
-```go
-type ProjectScope struct {
-    Path       string   // relative path within the project dir, e.g. ".mcp.json"
-    ReloadHint string   // may differ from global
-    Lifecycle  string   // creation / merge / preemptive-create behavior (human-readable)
-    Shareable  bool     // intended to be committed to VCS
-    TrustGate  bool     // requires workspace trust/approval before servers load
-}
-```
-
-### Detection result
-
-`Detection`, `Change`, and `Result` carry optional `Scope ScopeMode` and
-`ScopeDir string` fields (omitted when global), so consumers can distinguish a
-global hit from a project hit.
-
-### Rendering
-
-`RenderConfig(harness, server)` renders a global config. `RenderConfigScoped(harness, server,
-scope)` renders a config for the given scope. Project scope returns the rendered
-project file for that harness (`Continue` produces a bare block file without
-config.yaml metadata — see Locked decisions).
-
-### Unsupported scope
-
-For global-only harnesses (`claude-desktop`, `windsurf`, `cline`), project-scope
-`Detect` returns state `unavailable`, and `Plan`/`Apply` produce a `skipped`
-change with a clear `Reason`. Never an error that aborts a multi-harness run.
-
-### Protocol / wrappers
-
-The optional `scope: {mode, dir}` request field and optional `scope`,
-`scopeDir`, and `project` response fields are additive — `version` remains `1`.
-An older companion binary ignores the `scope` field and returns global results.
-
-## Locked decisions
-
-1. **Discovery model — single deterministic file.** We write/read one file in
-   the caller-supplied directory, uniformly for all 10 supported harnesses, and
-   document each tool's own parent-walk/deep-merge in the catalog so consumers
-   understand precedence. We do **not** replicate codex/opencode walks.
-2. **Continue project scope — canonical block file.** Target
-   `.continue/mcpServers/detect-harness.yaml` as the one deterministic file;
-   Continue still merges it with any sibling block files the user has.
-3. **Roo Code → Zoo Code (repoint).** Zoo Code (`ZooCodeOrganization.zoo-code`)
-   is the community successor that took over after the Roo team discontinued the
-   extension in May 2026. Verified against Zoo Code's source:
-   - Project file is **still `.roo/mcp.json`** (unchanged), key `mcpServers`.
-   - Global file is still `mcp_settings.json`, now under globalStorage
-     `ZooCodeOrganization.zoo-code` (was `rooveterinaryinc.roo-cline`).
-   - Detection extension prefix becomes `ZooCodeOrganization.zoo-code-`
-     (was `rooveterinaryinc.roo-cline-`).
-   - Canonical harness ID becomes **`zoo-code`** (Name "Zoo Code"); the existing
-     `roo-code` ID is retained as a **deprecated alias** resolving to the same
-     definition, so current callers keep working (non-breaking). `Supported()`
-   lists "Zoo Code"; `roo-code` is documented as a legacy alias.
-4. **OpenCode layers — inspect, never write.** The managed file is
-   `opencode.jsonc` (or a lone existing `opencode.json`). The other layers
-   OpenCode merges in the same scope (legacy `config.json`, the sibling
-   `opencode.json`, `.opencode/` directories, `$OPENCODE_CONFIG`,
-   `$OPENCODE_CONFIG_DIR`, `$OPENCODE_CONFIG_CONTENT`) are read-only conflict
-   sources: a same-name entry there is a conflict under `ConflictError` and a
-   `Reason` warning under `ConflictReplace`. Global layers are deliberately not
-   conflict sources for project scope, because differing per-project settings
-   are the purpose of project scope. Existing layer files appear as detection
-   evidence.
+The request carries an optional `scope: {mode, dir}` object, and detections,
+changes, and results carry optional `scope` and `scopeDir` fields; detections
+also carry the catalog's `project` metadata. Wire `version` remains `1`, and a
+request without `scope` is a global request.
 
 ## Sources
 
@@ -260,7 +172,8 @@ An older companion binary ignores the `scope` field and returns global results.
   https://zed.dev/docs/migrate/vs-code
 - Cline: https://docs.cline.bot/mcp/mcp-overview.md ,
   https://docs.cline.bot/getting-started/config.md
-- Roo Code: https://roocodeinc.github.io/Roo-Code/features/mcp/using-mcp-in-roo ,
+- Zoo Code (and the Roo Code lineage it continues):
+  https://roocodeinc.github.io/Roo-Code/features/mcp/using-mcp-in-roo ,
   https://github.com/RooCodeInc/Roo-Code (src/services/mcp/McpHub.ts)
 - Amazon Q: https://docs.aws.amazon.com/amazonq/latest/qdeveloper-ug/command-line-mcp.html ,
   https://github.com/aws/amazon-q-developer-cli (chat-cli/src/cli/mcp.rs, agent/mod.rs)

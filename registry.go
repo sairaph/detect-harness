@@ -151,8 +151,8 @@ func clineConfig(_ hostSystem, environment runtimeEnvironment) pathResolution {
 // The global directory is <xdg config>/opencode on every platform, including
 // Windows, because OpenCode resolves it with the xdg-basedir convention rather
 // than %APPDATA%. Within one directory OpenCode deep-merges, in order,
-// config.json (legacy), opencode.json, and opencode.jsonc, so a later file
-// wins on conflicting fields. On first run without any of them OpenCode seeds
+// config.json (kept for older installs), opencode.json, and opencode.jsonc,
+// so a later file wins on conflicting fields. On first run without any of them OpenCode seeds
 // opencode.jsonc, which is therefore the file this library creates and
 // prefers.
 //
