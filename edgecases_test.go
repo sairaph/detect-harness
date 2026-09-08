@@ -213,11 +213,15 @@ func TestSymlinkedLayerIsFollowed(t *testing.T) {
 
 func TestProjectScopeAtFilesystemRootDoesNotPanic(t *testing.T) {
 	installer, _ := installerWithEnv(t, nil)
+	root, err := filepath.Abs(string(filepath.Separator))
+	if err != nil {
+		t.Fatal(err)
+	}
 	detections, err := installer.DetectScoped(context.Background(), ProjectScopeDir(string(filepath.Separator)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := detectionFor(t, detections, OpenCode); got.ConfigPath != filepath.Join(string(filepath.Separator), "opencode.jsonc") {
+	if got := detectionFor(t, detections, OpenCode); got.ScopeDir != root || got.ConfigPath != filepath.Join(root, "opencode.jsonc") {
 		t.Fatalf("unexpected root project resolution: %#v", got)
 	}
 }
