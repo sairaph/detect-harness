@@ -1,3 +1,5 @@
+<img src=".github/icon.svg" alt="" width="96" height="96">
+
 # detect-harness
 
 [![release](https://img.shields.io/github/v/release/sairaph/detect-harness?label=release)](https://github.com/sairaph/detect-harness/releases)
